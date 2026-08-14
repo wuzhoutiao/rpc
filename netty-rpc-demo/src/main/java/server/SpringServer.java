@@ -10,10 +10,8 @@ import org.springframework.context.annotation.Configuration;
 @ComponentScan(basePackages = {
         "annotation",
         "bean",
-        "client",
         "constants",
         "factory",
-        "future",
         "handler",
         "medium",
         "protocol",
@@ -27,6 +25,3 @@ public class SpringServer {
         ApplicationContext context = new AnnotationConfigApplicationContext(SpringServer.class);
     }
 }
-//cd D:\apache-zookeeper-3.8.6-bin\bin
-//.\zkCli.cmd
-//ls /
