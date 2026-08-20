@@ -9,4 +9,6 @@ import java.lang.annotation.*;
 @Retention(RetentionPolicy.RUNTIME)
 @Documented //这个注解会出现在JavaDoc文档中
 public @interface RemoteInvoke {
+  String value() default "";
 }
+
