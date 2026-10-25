@@ -4,78 +4,109 @@ import client.annotation.RemoteInvoke;
 import client.core.NettyClient;
 import client.protocol.ClientRequest;
 import com.rpc.common.protocol.Response;
+
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.config.BeanPostProcessor;
-import org.springframework.cglib.proxy.Enhancer;
-import org.springframework.cglib.proxy.MethodInterceptor;
-import org.springframework.cglib.proxy.MethodProxy;
 import org.springframework.stereotype.Component;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
-import java.util.HashMap;
+import java.lang.reflect.Proxy;
 
-/*扫描 Spring Bean 里带 @RemoteInvoke 的字段，给这个字段生成一个代理对象。
-以后调用这个字段的方法时，不会真的执行本地方法，而是封装成 ClientRequest，通过 Netty 发给服务端。*/
 @Component
 public class InvokeProxy implements BeanPostProcessor {
 
-    private void putMethodClass(HashMap<Method, Class> methodmap, Field field) {
-        Method[] methods = field.getType().getDeclaredMethods(); //获取这个属性的类型和该类型中的所有方法
-        for(Method method : methods){
-            methodmap.put(method, field.getType()); //将方法和属性的类建立映射
-        }
+    @Override
+    public Object postProcessBeforeInitialization(
+            Object bean,
+            String beanName) throws BeansException {
 
-    }
-
-    public Object postProcessBeforeInitialization(Object bean, String arg1) throws BeansException {
-        System.out.println("InvokeProxy 正在处理 Bean：" + arg1);
         Field[] fields = bean.getClass().getDeclaredFields();
-        for(Field field : fields){
-            if(field.isAnnotationPresent(RemoteInvoke.class)){
-                System.out.println("发现 @RemoteInvoke 字段：" + field.getName());
-                field.setAccessible(true); //允许通过反射访问 private 字段
-                final Class<?> clazz = field.getType();
-                Enhancer enhancer = new Enhancer();
-                enhancer.setInterfaces(new Class[]{field.getType()}); //设置代理对象要实现的接口
-                enhancer.setCallback(new MethodInterceptor() { //设置拦截器，只要调用了代理对象的方法，就会进入 intercept()
-                    public Object intercept(Object instance, Method method, Object[] args, MethodProxy proxy) throws Throwable {
-                        ClientRequest clientRequest = new ClientRequest();
-                        clientRequest.setContent(args[0]); //把方法参数放进请求里
-                        String command =clazz.getName() + "." + method.getName();
-                        clientRequest.setCommand(command);
-                        System.out.println("客户端发送 command = " + clientRequest.getCommand());
-                        Response response = NettyClient.send(clientRequest);
-                        return response;
+
+        for (Field field : fields) {
+
+            if (!field.isAnnotationPresent(RemoteInvoke.class)) {
+                continue;
+            }
+
+            Class<?> clazz = field.getType();
+
+            // JDK 动态代理只能代理接口
+            if (!clazz.isInterface()) {
+                throw new IllegalStateException(
+                        "@RemoteInvoke 只能标注接口类型：" + clazz.getName()
+                );
+            }
+
+            System.out.println("发现远程服务接口：" + clazz.getName());
+
+            Object proxy = Proxy.newProxyInstance(
+                    clazz.getClassLoader(),
+                    new Class<?>[]{clazz},
+                    (proxyObject, method, args) -> {
+
+                        // Object 自带的方法不应该发送 RPC 请求
+                        if (method.getDeclaringClass() == Object.class) {
+                            switch (method.getName()) {
+                                case "toString":
+                                    return "RpcProxy(" + clazz.getName() + ")";
+                                case "hashCode":
+                                    return System.identityHashCode(proxyObject);
+                                case "equals":
+                                    return proxyObject == args[0];
+                                default:
+                                    throw new UnsupportedOperationException(
+                                            method.getName()
+                                    );
+                            }
+                        }
+
+                        ClientRequest request = new ClientRequest();
+
+                        // 当前 RPC 协议暂时只支持单参数
+                        if (args == null || args.length != 1) {
+                            throw new UnsupportedOperationException(
+                                    "当前 RPC 框架只支持单参数方法：" + method.getName()
+                            );
+                        }
+
+                        request.setContent(args[0]);
+
+                        String command =
+                                clazz.getName() + "." + method.getName();
+
+                        request.setCommand(command);
+
+                        System.out.println(
+                                "客户端发送 command = " + command
+                        );
+
+                        return NettyClient.send(request);
                     }
-                });
-                try {
-                    System.out.println("开始创建远程代理：" + clazz.getName());
+            );
 
-                    Object proxy = enhancer.create();
+            try {
+                field.setAccessible(true);
+                field.set(bean, proxy);
 
-                    System.out.println("代理创建成功：" + proxy.getClass().getName());
+                System.out.println(
+                        "远程代理注入成功：" + field.getName()
+                );
 
-                    field.set(bean, proxy);
-
-                    System.out.println("代理注入成功：" + field.getName());
-
-                } catch (Exception e) {
-
-                    System.err.println("远程代理注入失败：" + field.getName());
-
-                    throw new IllegalStateException(
-                            "无法为 @RemoteInvoke 字段创建代理：" + field.getName(),
-                            e
-                    );
-                }
+            } catch (IllegalAccessException e) {
+                throw new IllegalStateException(
+                        "远程代理注入失败：" + field.getName(),
+                        e
+                );
             }
         }
 
         return bean;
     }
 
-    public Object postProcessAfterInitialization(Object bean, String beanName){
+    @Override
+    public Object postProcessAfterInitialization(
+            Object bean,
+            String beanName) throws BeansException {
         return bean;
     }
 }
