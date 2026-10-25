@@ -8,6 +8,7 @@ import client.zk.ServerWatcher;
 import client.zk.ZooKeeperFactory;
 import com.alibaba.fastjson.JSONObject;
 import io.netty.bootstrap.Bootstrap;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
@@ -16,13 +17,13 @@ import io.netty.channel.socket.nio.NioSocketChannel;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.api.CuratorWatcher;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 
 public class NettyClient {
     public static final Bootstrap b = new Bootstrap();
-
-    private static ChannelFuture f = null;
 
     static {
         EventLoopGroup worker = new NioEventLoopGroup();
@@ -33,26 +34,24 @@ public class NettyClient {
                     .handler(new MyClientChannelInitializer());
 
             CuratorFramework client = ZooKeeperFactory.getClient(); //获取 Curator 封装好的 ZooKeeper 客户端对象
-            List<String> serverPath = client.getChildren().forPath(Constants.SERVER_PATH); //获取ZooKeeper 的 Constants.SERVER_PATH 节点下面的所有子节点
-            CuratorWatcher watcher = new ServerWatcher();
-            client.getChildren().usingWatcher(watcher).forPath(Constants.SERVER_PATH); //监听Constants.SERVER_PATH 节点下面所有的子节点变化
+            List<String> serverPath = client.getChildren().usingWatcher(new ServerWatcher()).forPath(Constants.SERVER_PATH); //获取ZooKeeper 的 Constants.SERVER_PATH 节点下面的所有子节点
 
+            Set<String> servers = new HashSet<>();
             for(String path : serverPath){
                 String[] str = path.split("#");
-                ChannelManager.realServerPath.add(str[0]+"#"+str[1]);
-                ChannelFuture channelFuture = NettyClient.b.connect(str[0], Integer.valueOf(str[1])).sync();
-                ChannelManager.addChannelFuture(channelFuture);
+                servers.add(str[0]+":"+str[1]);
             }
 
+            ChannelManager.updateChannels(servers,b);
         }catch (Exception e){
             e.printStackTrace();
         }
     }
 
     public static Response send(ClientRequest request){
-        ChannelFuture channelFuture = ChannelManager.get(ChannelManager.position);
-        channelFuture.channel().writeAndFlush(JSONObject.toJSONString(request)+"\r\n");
-        ResultFuture resultFuture = new ResultFuture(request);
+        Channel channel = ChannelManager.getChannel(); //轮询选择一个可用连接
+        ResultFuture resultFuture = new ResultFuture(request);// 先注册响应等待对象，避免响应先于注册到达
+        channel.writeAndFlush(JSONObject.toJSONString(request)+"\r\n");//发送rpc请求
         return resultFuture.get();
     }
 }

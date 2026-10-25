@@ -2,33 +2,35 @@ package client.zk;
 
 import client.core.ChannelManager;
 import client.core.NettyClient;
-import io.netty.channel.ChannelFuture;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.api.CuratorWatcher;
 import org.apache.zookeeper.WatchedEvent;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 public class ServerWatcher implements CuratorWatcher {
     //ZooKeeper 事件发生时自动调用
     public void  process(WatchedEvent event) throws Exception{
-        System.out.println("ZooKeeper事件发生，Watcher被触发了----------------");
-        CuratorFramework client = ZooKeeperFactory.getClient();
+        System.out.println("ZooKeeper Watcher被触发了----------------");
         String path = event.getPath(); //获取变化路径
-        client.getChildren().usingWatcher(this).forPath(path); //监听默认只触发一次，必须重新注册watcher继续监听该变化路径
-        List<String> newServerPaths = client.getChildren().forPath(path); //获取该变化路径下所有子节点
-        System.out.println("变化路径：" + path + "，当前所有子节点为：");
-        System.out.println(newServerPaths);
-        ChannelManager.realServerPath.clear(); //清空旧服务器集合
+        if(path==null) return;
+
+        CuratorFramework client = ZooKeeperFactory.getClient();
+        //重新注册watcher，同时获取最新子节点列表
+        List<String> newServerPaths = client.getChildren().usingWatcher(this).forPath(path); //获取该变化路径下所有子节点
+
+        Set<String> newServers = new HashSet<>();
+
         for(String p:newServerPaths){
             String[] str = p.split("#");
-            ChannelManager.realServerPath.add(str[0]+"#"+str[1]);
+            String ip = str[0];
+            String port = str[1];
+            newServers.add(ip+":"+port);
         }
-        ChannelManager.clearChannelFutures(); //清空旧连接
-        for(String r:ChannelManager.realServerPath){
-            String[] str = r.split("#");
-            ChannelFuture channelFuture = NettyClient.b.connect(str[0], Integer.valueOf(str[1])); //重新建立Netty连接
-            ChannelManager.addChannelFuture(channelFuture); //放进连接池
-        }
+
+        System.out.println("最新服务器列表："+newServers);
+        ChannelManager.updateChannels(newServers,NettyClient.b);
     }
 }
