@@ -2,7 +2,7 @@ package medium;
 
 import com.alibaba.fastjson.JSONObject;
 import constants.Constants;
-import protocol.Response;
+import com.rpc.common.protocol.Response;
 import protocol.ServerRequest;
 
 import java.lang.reflect.Method;

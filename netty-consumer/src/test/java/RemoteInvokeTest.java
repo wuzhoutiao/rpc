@@ -1,6 +1,6 @@
 import bean.User;
 import client.annotation.RemoteInvoke;
-import client.protocol.Response;
+import com.rpc.common.protocol.Response;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.springframework.context.annotation.ComponentScan;
@@ -19,7 +19,7 @@ public class RemoteInvokeTest {
     @Test
     public void testSaveUser() {
         User user = new User();
-        user.setId(1000);
+        user.setId(1000L);
         user.setName("张三");
 
         Response response = userremote.saveUser(user);

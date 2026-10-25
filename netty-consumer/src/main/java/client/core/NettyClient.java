@@ -3,7 +3,7 @@ package client.core;
 import client.constants.Constants;
 import client.handler.MyClientChannelInitializer;
 import client.protocol.ClientRequest;
-import client.protocol.Response;
+import com.rpc.common.protocol.Response;
 import client.zk.ServerWatcher;
 import client.zk.ZooKeeperFactory;
 import com.alibaba.fastjson.JSONObject;

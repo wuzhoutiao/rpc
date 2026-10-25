@@ -1,7 +1,7 @@
 package remote;
 
 import annotation.Remote;
-import protocol.Response;
+import com.rpc.common.protocol.Response;
 import bean.User;
 import service.UserService;
 import util.ResponseUtil;

@@ -4,9 +4,13 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>com.rpc</groupId>
+    <parent>
+        <groupId>com.rpc</groupId>
+        <artifactId>rpc</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+
     <artifactId>netty-server-demo</artifactId>
-    <version>1.0-SNAPSHOT</version>
 
     <properties>
         <maven.compiler.source>11</maven.compiler.source>
@@ -74,6 +78,18 @@
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-simple</artifactId>
             <version>1.7.30</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.rpc</groupId>
+            <artifactId>rpc-common</artifactId>
+            <version>1.0-SNAPSHOT</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.rpc</groupId>
+            <artifactId>rpc-api</artifactId>
+            <version>${project.version}</version>
         </dependency>
 
     </dependencies>

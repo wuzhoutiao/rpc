@@ -1,7 +1,7 @@
 package client.handler;
 
 import client.core.ResultFuture;
-import client.protocol.Response;
+import com.rpc.common.protocol.Response;
 import com.alibaba.fastjson.JSONObject;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;

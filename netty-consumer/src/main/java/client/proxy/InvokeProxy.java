@@ -3,7 +3,7 @@ package client.proxy;
 import client.annotation.RemoteInvoke;
 import client.core.NettyClient;
 import client.protocol.ClientRequest;
-import client.protocol.Response;
+import com.rpc.common.protocol.Response;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.cglib.proxy.Enhancer;
@@ -29,9 +29,11 @@ public class InvokeProxy implements BeanPostProcessor {
     }
 
     public Object postProcessBeforeInitialization(Object bean, String arg1) throws BeansException {
+        System.out.println("InvokeProxy 正在处理 Bean：" + arg1);
         Field[] fields = bean.getClass().getDeclaredFields();
         for(Field field : fields){
             if(field.isAnnotationPresent(RemoteInvoke.class)){
+                System.out.println("发现 @RemoteInvoke 字段：" + field.getName());
                 field.setAccessible(true); //允许通过反射访问 private 字段
                 final Class<?> clazz = field.getType();
                 Enhancer enhancer = new Enhancer();
@@ -48,9 +50,24 @@ public class InvokeProxy implements BeanPostProcessor {
                     }
                 });
                 try {
-                    field.set(bean, enhancer.create()); //把生成的代理对象塞回原来的字段里
+                    System.out.println("开始创建远程代理：" + clazz.getName());
+
+                    Object proxy = enhancer.create();
+
+                    System.out.println("代理创建成功：" + proxy.getClass().getName());
+
+                    field.set(bean, proxy);
+
+                    System.out.println("代理注入成功：" + field.getName());
+
                 } catch (Exception e) {
-                    e.printStackTrace();
+
+                    System.err.println("远程代理注入失败：" + field.getName());
+
+                    throw new IllegalStateException(
+                            "无法为 @RemoteInvoke 字段创建代理：" + field.getName(),
+                            e
+                    );
                 }
             }
         }

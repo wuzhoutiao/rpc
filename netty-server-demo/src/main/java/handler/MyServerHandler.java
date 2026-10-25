@@ -4,7 +4,7 @@ import com.alibaba.fastjson.JSONObject;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import medium.Medium;
-import protocol.Response;
+import com.rpc.common.protocol.Response;
 import protocol.ServerRequest;
 
 import java.util.concurrent.Executor;

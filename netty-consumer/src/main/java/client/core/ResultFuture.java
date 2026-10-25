@@ -2,7 +2,7 @@ package client.core;
 
 import client.constants.Constants;
 import client.protocol.ClientRequest;
-import client.protocol.Response;
+import com.rpc.common.protocol.Response;
 
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;

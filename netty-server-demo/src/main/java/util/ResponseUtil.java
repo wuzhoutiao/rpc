@@ -1,7 +1,7 @@
 package util;
 
 import constants.Constants;
-import protocol.Response;
+import com.rpc.common.protocol.Response;
 
 public class ResponseUtil {
 
