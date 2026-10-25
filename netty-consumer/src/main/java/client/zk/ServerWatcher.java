@@ -31,6 +31,6 @@ public class ServerWatcher implements CuratorWatcher {
         }
 
         System.out.println("最新服务器列表："+newServers);
-        ChannelManager.updateChannels(newServers,NettyClient.b);
+        ChannelManager.updateChannels(newServers, NettyClient.b);
     }
 }

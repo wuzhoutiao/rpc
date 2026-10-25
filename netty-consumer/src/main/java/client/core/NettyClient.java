@@ -20,6 +20,7 @@ import org.apache.curator.framework.api.CuratorWatcher;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 
 public class NettyClient {
@@ -31,6 +32,7 @@ public class NettyClient {
             b.group(worker)
                     .channel(NioSocketChannel.class)
                     .option(ChannelOption.SO_KEEPALIVE, true)
+                    .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 3000) //单次 TCP 连接尝试的超时时间
                     .handler(new MyClientChannelInitializer());
 
             CuratorFramework client = ZooKeeperFactory.getClient(); //获取 Curator 封装好的 ZooKeeper 客户端对象
@@ -42,8 +44,12 @@ public class NettyClient {
                 servers.add(str[0]+":"+str[1]);
             }
 
-            ChannelManager.updateChannels(servers,b);
+            ChannelManager.updateChannels(servers,b);//异步建立连接，不等待连接成功
+
+            System.out.println("RPC 客户端初始化完成");
+
         }catch (Exception e){
+            System.err.println(("RPC 客户端初始化异常"));
             e.printStackTrace();
         }
     }
