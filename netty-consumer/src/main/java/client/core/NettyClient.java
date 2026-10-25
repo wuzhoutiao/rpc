@@ -9,18 +9,14 @@ import client.zk.ZooKeeperFactory;
 import com.alibaba.fastjson.JSONObject;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import org.apache.curator.framework.CuratorFramework;
-import org.apache.curator.framework.api.CuratorWatcher;
-
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 
 
 public class NettyClient {
@@ -54,10 +50,15 @@ public class NettyClient {
         }
     }
 
+    public  static void initialize(){
+    }
+
     public static Response send(ClientRequest request){
         Channel channel = ChannelManager.getChannel(); //轮询选择一个可用连接
         ResultFuture resultFuture = new ResultFuture(request);// 先注册响应等待对象，避免响应先于注册到达
-        channel.writeAndFlush(JSONObject.toJSONString(request)+"\r\n");//发送rpc请求
+        channel.writeAndFlush(JSONObject.toJSONString(request)+"\r\n");//发送 rpc 请求
         return resultFuture.get();
     }
+
+
 }
