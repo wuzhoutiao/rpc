@@ -13,11 +13,15 @@ public class ChannelManager {
 
     private static final ConcurrentHashMap<String, Channel> channels=new ConcurrentHashMap<>(); //已经连接成功的服务器，其中key:服务器地址，value:对应的netty channel
     private static final Set<String> connectingServers = ConcurrentHashMap.newKeySet(); //正在建立连接的服务器
-    private static volatile Set<String> latestServers; //Zookeeper 最新的服务器列表
+    private static volatile Set<String> latestServers = Collections.emptySet();//Zookeeper 最新的服务器列表
     private static volatile  List<Channel> channelSnapshot= Collections.emptyList();//保存固定顺序的连接快照，供轮询使用
     private static final AtomicInteger position = new AtomicInteger(0);//轮流请求不同服务器；多个线程可能同时发 RPC 请求，AtomicInteger保证线程安全
+    private static volatile boolean shuttingDown = false;// RPC 客户端是否已经进入关闭流程
 
     public static synchronized void updateChannels(Set<String> newServers, Bootstrap bootstrap){
+        if (shuttingDown) {
+            return;
+        }
         latestServers = Collections.unmodifiableSet(new HashSet<>(newServers)); //保存最新的服务器列表
 
         //删除已经下线的服务器
@@ -40,6 +44,9 @@ public class ChannelManager {
     }
 
     private static void connectServer(String server, Bootstrap bootstrap){
+        if (shuttingDown) {
+            return;
+        }
         //服务器已经从 zk 中下线
         if(!latestServers.contains(server)) return ;
         //已存在有效连接
@@ -61,9 +68,9 @@ public class ChannelManager {
                     if(f.isSuccess()){
                         Channel newChannel = f.channel();
                         //连接成功时，再次检查服务器是否还存在
-                        if(!latestServers.contains(server)){
+                        if(shuttingDown||!latestServers.contains(server)){
                             newChannel.close();
-                            System.out.println("服务器已下线，放弃连接："+server);
+                            System.out.println("客户端正在关闭或服务器已下线，放弃连接：" + server);
                             return;
                         }
                         //加入连接池
@@ -78,7 +85,7 @@ public class ChannelManager {
                                 //只删除当前断开的 channel
                                 channels.remove(server,newChannel);
                                 refreshSnapshot();
-                                reconnect = latestServers.contains(server);
+                                reconnect = !shuttingDown && latestServers.contains(server);
                             }
                             System.out.println("连接已断开："+server);
                             if(reconnect){
@@ -93,7 +100,7 @@ public class ChannelManager {
                         if(f.cause()!=null){
                             f.cause().printStackTrace();
                         }
-                        shouldReconnect= latestServers.contains(server);
+                        shouldReconnect= !shuttingDown && latestServers.contains(server);
                     }
                 }
                 if(shouldReconnect){
@@ -105,7 +112,7 @@ public class ChannelManager {
             connectingServers.remove(server);
             System.err.println("发起连接失败：" + server);
             e.printStackTrace();
-            if(latestServers.contains(server)){
+            if(!shuttingDown&&latestServers.contains(server)){
                 scheduleReconnect(server,bootstrap);
             }
         }
@@ -116,32 +123,53 @@ public class ChannelManager {
             String server,
             Bootstrap bootstrap) {
 
-        bootstrap.config().group().next().schedule(() -> {
+        if (shuttingDown) {
+            return;
+        }
 
-            synchronized (ChannelManager.class) {
+        try {
+            bootstrap.config().group().next().schedule(() -> {
 
-                // 服务器已经下线，不再重连
-                if (!latestServers.contains(server)) {
-                    return;
+                synchronized (ChannelManager.class) {
+
+                    // 客户端正在关闭，不允许重连
+                    if (shuttingDown) {
+                        return;
+                    }
+
+                    // 服务器已经从 ZooKeeper 下线
+                    if (!latestServers.contains(server)) {
+                        return;
+                    }
+
+                    // 已经存在可用连接
+                    Channel channel = channels.get(server);
+
+                    if (channel != null && channel.isActive()) {
+                        return;
+                    }
+
+                    // 重新建立连接
+                    connectServer(server, bootstrap);
                 }
 
-                // 服务器已经重新连接成功
-                Channel channel = channels.get(server);
+            }, 3, TimeUnit.SECONDS);
 
-                if (channel != null && channel.isActive()) {
-                    return;
-                }
+        } catch (RejectedExecutionException e) {
 
-                // 重新发起异步连接
-                connectServer(server, bootstrap);
+            // 线程组关闭期间可能拒绝新的调度任务
+            if (!shuttingDown) {
+                throw e;
             }
-
-        }, 3, TimeUnit.SECONDS);
+        }
     }
 
 
 
     public static Channel getChannel(){
+        if (shuttingDown) {
+            throw new IllegalStateException("RPC 客户端正在关闭，无法发送请求");
+        }
         List<Channel> snapshot =channelSnapshot;
         if(snapshot.isEmpty()){
             throw new IllegalStateException("当前没有可用的 RPC 服务器");
@@ -175,6 +203,43 @@ public class ChannelManager {
             }
         }
         channelSnapshot=Collections.unmodifiableList(snapshot);
+    }
+
+    /**
+     * 关闭所有 RPC 连接，并停止自动重连
+     */
+    public static synchronized void shutdown() {
+
+        if (shuttingDown) {
+            return;
+        }
+
+        System.out.println("ChannelManager 开始关闭");
+
+        // 1. 标记关闭状态
+        shuttingDown = true;
+
+        // 2. 清空服务器列表
+        latestServers = Collections.emptySet();
+
+        // 3. 清空连接快照
+        channelSnapshot = Collections.emptyList();
+
+        // 4. 关闭所有已有连接
+        for (Channel channel : channels.values()) {
+
+            if (channel != null) {
+                channel.close();
+            }
+        }
+
+        // 5. 清空连接池
+        channels.clear();
+
+        // 6. 清空正在连接的服务器记录
+        connectingServers.clear();
+
+        System.out.println("ChannelManager 已发起所有连接的关闭");
     }
 
 }

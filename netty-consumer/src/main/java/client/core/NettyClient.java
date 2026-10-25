@@ -8,9 +8,7 @@ import client.zk.ServerWatcher;
 import client.zk.ZooKeeperFactory;
 import com.alibaba.fastjson.JSONObject;
 import io.netty.bootstrap.Bootstrap;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelOption;
-import io.netty.channel.EventLoopGroup;
+import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import org.apache.curator.framework.CuratorFramework;
@@ -22,8 +20,14 @@ import java.util.Set;
 public class NettyClient {
     public static final Bootstrap b = new Bootstrap();
 
+    // Netty 客户端线程组
+    private static final EventLoopGroup worker = new NioEventLoopGroup();
+
+    // 客户端是否正在关闭
+    private static volatile boolean shuttingDown = false;
+
+
     static {
-        EventLoopGroup worker = new NioEventLoopGroup();
         try {
             b.group(worker)
                     .channel(NioSocketChannel.class)
@@ -53,12 +57,83 @@ public class NettyClient {
     public  static void initialize(){
     }
 
-    public static Response send(ClientRequest request){
-        Channel channel = ChannelManager.getChannel(); //轮询选择一个可用连接
-        ResultFuture resultFuture = new ResultFuture(request);// 先注册响应等待对象，避免响应先于注册到达
-        channel.writeAndFlush(JSONObject.toJSONString(request)+"\r\n");//发送 rpc 请求
+    public static Response send(ClientRequest request) {
+
+        // 1. 获取可用连接
+        Channel channel = ChannelManager.getChannel();
+
+        // 2. 注册等待对象
+        ResultFuture resultFuture = new ResultFuture(request);
+
+        // 3. 异步发送请求
+        ChannelFuture future = channel.writeAndFlush(
+                JSONObject.toJSONString(request) + "\r\n"
+        );
+
+        // 4. 监听发送结果
+        future.addListener((ChannelFutureListener) f -> {
+
+            if (!f.isSuccess()) {
+
+                System.err.println(
+                        "RPC 请求发送失败，requestId = " + request.getId()
+                );
+
+                if (f.cause() != null) {
+                    f.cause().printStackTrace();
+                }
+
+                // 构造失败响应
+                Response response = new Response();
+
+                response.setId(request.getId());
+                response.setCode("RPC_SEND_FAILED");
+                response.setMessage("RPC 请求发送失败");
+
+                // 通知 ResultFuture
+                ResultFuture.receive(response);
+            }
+        });
+
+        // 5. 等待服务端响应或发送失败通知
         return resultFuture.get();
     }
 
+    public static boolean isShuttingDown() {
+        return shuttingDown;
+    }
+
+    public static synchronized void shutdown() {
+
+        // 防止重复关闭
+        if (shuttingDown) {
+            return;
+        }
+
+        // 1. 标记客户端正在关闭
+        shuttingDown = true;
+
+        System.out.println("RPC 客户端开始关闭");
+
+        // 2. 结束所有正在等待的 RPC 请求
+        ResultFuture.shutdownAll();
+
+        // 3. 停止自动重连，并关闭所有 Channel
+        ChannelManager.shutdown();
+
+        // 4. 关闭 ZooKeeper 客户端
+        CuratorFramework zkClient = ZooKeeperFactory.client;
+
+        if (zkClient != null) {
+            zkClient.close();
+            System.out.println("ZooKeeper 客户端已关闭");
+        }
+
+        // 5. 关闭 Netty 线程组
+        worker.shutdownGracefully();
+
+        System.out.println("Netty 线程组已发起关闭");
+        System.out.println("RPC 客户端关闭流程已启动");
+    }
 
 }

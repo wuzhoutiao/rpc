@@ -4,110 +4,205 @@ import client.constants.Constants;
 import client.protocol.ClientRequest;
 import com.rpc.common.protocol.Response;
 
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 public class ResultFuture {
-    public final static ConcurrentHashMap<Long,ResultFuture> map = new ConcurrentHashMap<Long,ResultFuture>(); //其中key是requestId
-    final Lock lock = new ReentrantLock();
-    private Condition condition = lock.newCondition();
+
+    // 保存正在等待响应的 RPC 请求
+    public static final ConcurrentHashMap<Long, ResultFuture> map =
+            new ConcurrentHashMap<>();
+
+    private final Lock lock = new ReentrantLock();
+
+    private final Condition condition = lock.newCondition();
+
+    // RPC 响应
     private Response response;
-    private final long timeOut = 2*60*1000L;
-    private Long startTime = System.currentTimeMillis();
+
+    // 请求是否已经完成
+    private boolean completed = false;
+
+    // 超时时间：120 秒
+    private final long timeOut = 2 * 60 * 1000L;
+
+    // 请求开始时间
+    private final long startTime = System.currentTimeMillis();
+
+    // 请求 ID
+    private final long requestId;
+
+    // 所有 ResultFuture 共用的生命周期锁
+    private static final Object LIFECYCLE_LOCK = new Object();
+
+    // 是否已经关闭
+    private static volatile boolean shuttingDown = false;
 
     public ResultFuture(ClientRequest request) {
-        map.put(request.getId(), this);
-    }
 
+        this.requestId = request.getId();
+
+        synchronized (LIFECYCLE_LOCK) {
+
+            // 客户端关闭后，不允许注册新请求
+            if (shuttingDown) {
+                throw new IllegalStateException(
+                        "RPC 客户端已关闭，无法创建新请求"
+                );
+            }
+
+            ResultFuture previous = map.putIfAbsent(requestId, this);
+
+            if (previous != null) {
+                throw new IllegalStateException(
+                        "重复的 RPC 请求 ID：" + requestId
+                );
+            }
+        }
+    }
+    /**
+     * 等待 RPC 响应
+     */
     public Response get() {
+
         lock.lock();
+
         try {
-            while (!done()){
+
+            while (!completed) {
                 condition.await();
             }
-        }catch (Exception e){
-            e.printStackTrace();
-        }finally {
+
+            return response;
+
+        } catch (InterruptedException e) {
+
+            Thread.currentThread().interrupt();
+
+            throw new IllegalStateException(
+                    "等待 RPC 响应时线程被中断，requestId = " + requestId,
+                    e
+            );
+
+        } finally {
+
+            // 如果等待线程被中断，移除未完成请求；
+            // 如果请求已完成，这里不会影响其他请求。
+            map.remove(requestId, this);
+
             lock.unlock();
         }
-        System.out.println("id="+this.response.getId()+"的请求，已收到服务端返回结果");
-        return this.response;
     }
 
-
-    //收到response后，唤醒对应future
+    /**
+     * 收到服务端响应、发送失败响应或超时响应
+     */
     public static void receive(Response response) {
-        if(response!=null){
-            ResultFuture future = map.get(response.getId());
-            if(future!=null){
-                Lock lock = future.lock;
-                lock.lock();
-                try {
-                    future.setResponse(response);
-                    future.condition.signal(); //唤醒线程
-                    map.remove(response.getId());
-                }catch (Exception e){
-                    e.printStackTrace();
-                }finally {
-                    lock.unlock();
-                }
+
+        if (response == null) {
+            return;
+        }
+
+        ResultFuture future = map.get(response.getId());
+
+        if (future == null) {
+            return;
+        }
+
+        future.complete(response);
+    }
+
+    /**
+     * 完成当前请求
+     *
+     * 同一个请求只能完成一次。
+     */
+    private void complete(Response response) {
+
+        lock.lock();
+
+        try {
+
+            // 已经完成，不允许覆盖之前的结果
+            if (completed) {
+                return;
             }
+
+            this.response = response;
+
+            this.completed = true;
+
+            // 唤醒等待线程
+            condition.signalAll();
+
+            System.out.println(
+                    "RPC 请求完成，requestId = " + requestId
+                            + "，code = " + response.getCode()
+            );
+
+        } finally {
+
+            // 只移除当前 ResultFuture，避免误删其他请求
+            map.remove(requestId, this);
+
+            lock.unlock();
         }
     }
 
-    public boolean done() {
-        if(this.response != null){
-            return true;
-        }
-        return false;
+    /**
+     * 判断请求是否已经超时
+     */
+    private boolean isTimeout() {
+
+        return System.currentTimeMillis() - startTime >= timeOut;
     }
 
-    public Long getTimeout() {
-        return timeOut;
-    }
+    /**
+     * 创建超时响应
+     */
+    private Response createTimeoutResponse() {
 
-    public Long getStartTime() {
-        return startTime;
-    }
+        Response response = new Response();
 
-    public void setStartTime(Long startTime) {
-        this.startTime = startTime;
-    }
+        response.setId(requestId);
 
-    public Response getResponse() {
+        response.setCode(Constants.TIMEOUT);
+
+        response.setMessage("RPC 请求超时");
+
         return response;
     }
 
-    public void setResponse(Response response) {
-        this.response = response;
-    }
+    /**
+     * 后台超时清理线程
+     */
+    static class ClearFutureThread extends Thread {
 
-    //清理线程，即使服务端没返回，也能主动构造超时Response
-    static class ClearFutureThread extends Thread{
         @Override
         public void run() {
-            while(true) {
-                Set<Long> RequestIds = map.keySet();
-                for (Long requestId : RequestIds) {
-                    ResultFuture future = map.get(requestId);
-                    if (future == null) { //防止空指针
-                        continue;
-                    }
-                    if (future.getTimeout() < (System.currentTimeMillis() - future.getStartTime())) { // 请求还在等待，但超时
-                        Response res = new Response();
-                        res.setId(requestId);
-                        res.setCode(Constants.TIMEOUT);
-                        res.setMessage("超时");
-                        System.out.println("请求" + requestId + "超时");
-                        receive(res);
-                    }
-                }
+
+            while (!isInterrupted()) {
+
                 try {
-                    Thread.sleep(1000);
+
+                    for (ResultFuture future : map.values()) {
+
+                        if (future.isTimeout()) {
+
+                            future.complete(
+                                    future.createTimeoutResponse()
+                            );
+                        }
+                    }
+
+                    TimeUnit.SECONDS.sleep(1);
+
                 } catch (InterruptedException e) {
+
+                    interrupt();
                     break;
                 }
             }
@@ -115,8 +210,49 @@ public class ResultFuture {
     }
 
     static {
-        ClearFutureThread clearFutureThread = new ClearFutureThread(); //类加载时，自动启动一个后台清理线程
-        clearFutureThread.setDaemon(true); //设置为守护线程，当JVM退出时，不阻止程序结束
+
+        ClearFutureThread clearFutureThread =
+                new ClearFutureThread();
+
+        clearFutureThread.setName("rpc-future-timeout-cleaner");
+
+        clearFutureThread.setDaemon(true);
+
         clearFutureThread.start();
     }
+
+    /**
+     * RPC 客户端关闭时，结束所有尚未完成的请求
+     */
+    public static void shutdownAll() {
+
+        synchronized (LIFECYCLE_LOCK) {
+
+            if (shuttingDown) {
+                return;
+            }
+
+            // 1. 禁止新请求注册
+            shuttingDown = true;
+
+            System.out.println("开始结束所有未完成的 RPC 请求");
+
+            // 2. 遍历当前所有请求
+            for (ResultFuture future : map.values()) {
+
+                Response response = new Response();
+
+                response.setId(future.requestId);
+                response.setCode("RPC_CLIENT_SHUTDOWN");
+                response.setMessage("RPC 客户端已关闭");
+
+                // 3. 使用现有完成机制唤醒等待线程
+                future.complete(response);
+            }
+
+            System.out.println("所有未完成的 RPC 请求已处理");
+        }
+    }
+
 }
+
