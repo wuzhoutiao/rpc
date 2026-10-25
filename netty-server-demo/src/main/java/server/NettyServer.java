@@ -8,6 +8,7 @@ import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import medium.Medium;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.zookeeper.CreateMode;
 import org.springframework.context.ApplicationListener;
@@ -15,6 +16,8 @@ import org.springframework.context.event.ContextRefreshedEvent;
 import org.springframework.stereotype.Component;
 
 import java.net.InetAddress;
+import java.util.HashSet;
+import java.util.Set;
 
 @Component
 public class NettyServer implements ApplicationListener<ContextRefreshedEvent> {
@@ -33,16 +36,49 @@ public class NettyServer implements ApplicationListener<ContextRefreshedEvent> {
 
             ChannelFuture f = serverBootstrap.bind(Constants.SERVER_PORT).sync(); //绑定端口，并同步等待绑定完成
 
-            System.out.println("准备注册");
+            System.out.println("准备注册 RPC 服务");
 
-            CuratorFramework client = ZooKeeperFactory.getClient(); //获得一个zookeeper客户端来连接
-            if(client != null) {
-                System.out.println(client);
-                client.create()
-                        .creatingParentsIfNeeded()
-                        .withMode(CreateMode.EPHEMERAL_SEQUENTIAL) //临时端点
-                        .forPath(Constants.SERVER_PATH+"/"+InetAddress.getLocalHost().getHostAddress()+"#"+Constants.SERVER_PORT+"#");
-                System.out.println("注册成功");
+            CuratorFramework client = ZooKeeperFactory.getClient();
+
+            if (client != null) {
+
+                // 1. 获取当前服务器暴露的所有接口
+                Set<String> serviceNames = new HashSet<>();
+
+                for (String command : Medium.mediamap.keySet()) {
+
+                    // 例如 remote.UserRemote.getUser
+                    // 提取 remote.UserRemote
+                    int lastDotIndex = command.lastIndexOf(".");
+
+                    if (lastDotIndex > 0) {
+                        String serviceName = command.substring(0, lastDotIndex);
+                        serviceNames.add(serviceName);
+                    }
+                }
+
+                // 2. 获取当前服务器地址
+                String address = InetAddress.getLocalHost().getHostAddress()
+                        + "#" + Constants.SERVER_PORT + "#";
+
+                // 3. 按照接口名称注册
+                for (String serviceName : serviceNames) {
+
+                    String path = Constants.SERVER_PATH
+                            + "/" + serviceName
+                            + "/" + address;
+
+                    String registeredPath = client.create()
+                            .creatingParentsIfNeeded()
+                            .withMode(CreateMode.EPHEMERAL_SEQUENTIAL)
+                            .forPath(path);
+
+                    System.out.println("RPC 服务注册成功：" + registeredPath);
+                }
+
+                if (serviceNames.isEmpty()) {
+                    System.out.println("当前服务器没有发现需要注册的 RPC 接口");
+                }
             }
 
             f.channel() //f.channel()拿到监听端口的ServerSocketChannel

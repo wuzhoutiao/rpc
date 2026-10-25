@@ -20,6 +20,9 @@ import java.util.Set;
 public class NettyClient {
     public static final Bootstrap b = new Bootstrap();
 
+    // 整个 RPC 客户端共用同一个服务发现 Watcher
+    private static final ServerWatcher serverWatcher = new ServerWatcher();
+
     // Netty 客户端线程组
     private static final EventLoopGroup worker = new NioEventLoopGroup();
 
@@ -35,17 +38,10 @@ public class NettyClient {
                     .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 3000) //单次 TCP 连接尝试的超时时间
                     .handler(new MyClientChannelInitializer());
 
-            CuratorFramework client = ZooKeeperFactory.getClient(); //获取 Curator 封装好的 ZooKeeper 客户端对象
-            List<String> serverPath = client.getChildren().usingWatcher(new ServerWatcher()).forPath(Constants.SERVER_PATH); //获取ZooKeeper 的 Constants.SERVER_PATH 节点下面的所有子节点
-
-            Set<String> servers = new HashSet<>();
-            for(String path : serverPath){
-                String[] str = path.split("#");
-                servers.add(str[0]+":"+str[1]);
-            }
-
-            ChannelManager.updateChannels(servers,b);//异步建立连接，不等待连接成功
-
+            // 初始化 ZooKeeper 客户端
+            ZooKeeperFactory.getClient();
+            // 首次读取所有 RPC 服务，并注册 Watcher
+            serverWatcher.refreshServices();
             System.out.println("RPC 客户端初始化完成");
 
         }catch (Exception e){
@@ -59,18 +55,39 @@ public class NettyClient {
 
     public static Response send(ClientRequest request) {
 
-        // 1. 获取可用连接
-        Channel channel = ChannelManager.getChannel();
+        // 1. 获取 RPC 命令
+        String command = request.getCommand();
 
-        // 2. 注册等待对象
+        if (command == null || command.trim().isEmpty()) {
+            throw new IllegalArgumentException(
+                    "RPC 请求 command 不能为空"
+            );
+        }
+
+        // 2. 从 command 中提取接口名称
+        // 例如：remote.UserRemote.getUser
+        int lastDotIndex = command.lastIndexOf(".");
+
+        if (lastDotIndex <= 0 || lastDotIndex == command.length() - 1) {
+            throw new IllegalArgumentException(
+                    "无效的 RPC 命令：" + command
+            );
+        }
+
+        String serviceName = command.substring(0, lastDotIndex);
+
+        // 3. 根据接口名称选择服务器
+        Channel channel = ChannelManager.getChannel(serviceName);
+
+        // 4. 注册等待对象
         ResultFuture resultFuture = new ResultFuture(request);
 
-        // 3. 异步发送请求
+        // 5. 异步发送请求
         ChannelFuture future = channel.writeAndFlush(
                 JSONObject.toJSONString(request) + "\r\n"
         );
 
-        // 4. 监听发送结果
+        // 6. 监听发送结果
         future.addListener((ChannelFutureListener) f -> {
 
             if (!f.isSuccess()) {
@@ -83,19 +100,17 @@ public class NettyClient {
                     f.cause().printStackTrace();
                 }
 
-                // 构造失败响应
                 Response response = new Response();
 
                 response.setId(request.getId());
                 response.setCode("RPC_SEND_FAILED");
                 response.setMessage("RPC 请求发送失败");
 
-                // 通知 ResultFuture
                 ResultFuture.receive(response);
             }
         });
 
-        // 5. 等待服务端响应或发送失败通知
+        // 7. 等待响应
         return resultFuture.get();
     }
 
@@ -134,6 +149,14 @@ public class NettyClient {
 
         System.out.println("Netty 线程组已发起关闭");
         System.out.println("RPC 客户端关闭流程已启动");
+    }
+
+    /**
+     * 获取指定 RPC 接口对应的服务器地址
+     */
+    public static Set<String> getServers(String serviceName) {
+
+        return serverWatcher.getServers(serviceName);
     }
 
 }

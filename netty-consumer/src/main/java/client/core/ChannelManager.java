@@ -187,6 +187,63 @@ public class ChannelManager {
         throw new IllegalStateException("当前 RPC 连接均不可用");
     }
 
+    /**
+     * 根据 RPC 接口名称选择可用连接
+     *
+     * @param serviceName RPC 接口完整名称
+     * @return 可用的 Netty Channel
+     */
+    public static Channel getChannel(String serviceName) {
+
+        // 1. 判断客户端是否正在关闭
+        if (shuttingDown) {
+            throw new IllegalStateException(
+                    "RPC 客户端正在关闭，无法发送请求"
+            );
+        }
+
+        // 2. 获取提供该接口的服务器列表
+        Set<String> servers = NettyClient.getServers(serviceName);
+
+        if (servers.isEmpty()) {
+            throw new IllegalStateException(
+                    "没有发现 RPC 服务：" + serviceName
+            );
+        }
+
+        // 3. 将服务器地址排序，保证轮询顺序稳定
+        List<String> addresses = new ArrayList<>(servers);
+
+        Collections.sort(addresses);
+
+        // 4. 计算轮询起始位置
+        int size = addresses.size();
+
+        int start = Math.floorMod(
+                position.getAndIncrement(),
+                size
+        );
+
+        // 5. 从该接口对应的服务器中选择可用 Channel
+        for (int i = 0; i < size; i++) {
+
+            int index = (start + i) % size;
+
+            String address = addresses.get(index);
+
+            Channel channel = channels.get(address);
+
+            if (channel != null && channel.isActive()) {
+                return channel;
+            }
+        }
+
+        // 6. 该接口对应的服务器都不可用
+        throw new IllegalStateException(
+                "RPC 服务暂无可用连接：" + serviceName
+        );
+    }
+
 
     //当服务器列表发生变化时，更新Map，重新生成快照
     private static void refreshSnapshot(){
