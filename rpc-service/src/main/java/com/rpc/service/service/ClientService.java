@@ -27,4 +27,8 @@ public class ClientService {
     public Response callRemote(User user) {
         return userRemote.saveUser(user);
     }
+
+    public Response findRemote(long id, String name) {
+        return userRemote.findUser(id, name);
+    }
 }

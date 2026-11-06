@@ -1,57 +1,40 @@
 package com.rpc.server.handler;
 
 import com.alibaba.fastjson.JSONObject;
-import com.rpc.api.protocol.HeartbeatMessage;
 import com.rpc.api.protocol.Request;
 import com.rpc.api.protocol.Response;
+import com.rpc.api.protocol.RpcMethodSignature;
+import com.rpc.api.metrics.RpcMetrics;
 import com.rpc.server.medium.RpcRequestDispatcher;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
-import io.netty.handler.timeout.IdleState;
-import io.netty.handler.timeout.IdleStateEvent;
+
+import java.util.Map;
 
 public class RpcServerHandler extends ChannelInboundHandlerAdapter {
+    private static final boolean VERBOSE = Boolean.getBoolean("rpc.verbose");
     /* 请求进入 pipeline 后，由业务 EventExecutorGroup 执行反序列化、反射调用和响应写回。 */
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         String message = msg.toString();
 
-        // 心跳消息不进入 RPC 反序列化和业务线程池
-        if (HeartbeatMessage.PONG.equals(message)) {
-            System.out.println("收到客户端心跳 pong");
-            return;
-        }
-        if (HeartbeatMessage.PING.equals(message)) {
-            ctx.writeAndFlush(
-                    HeartbeatMessage.PONG + HeartbeatMessage.LINE_DELIMITER
-            );
-            return;
-        }
-
-        System.out.println("服务器收到消息：" + message);
+        if (VERBOSE) System.out.println("服务器收到消息：" + message);
         Request request = JSONObject.parseObject(message, Request.class);
-        System.out.println("正在处理请求，id=" + request.getId() + ", command=" + request.getCommand());
+        if (VERBOSE) {
+            System.out.println("正在处理请求，id=" + request.getId() + ", command=" + request.getCommand());
+        }
+        long startNanos = System.nanoTime();
         Response response = RpcRequestDispatcher.newInstance().process(request);
+        long elapsedMillis = (System.nanoTime() - startNanos) / 1_000_000L;
+        String service = RpcMethodSignature.serviceName(request.getCommand());
+        String outcome = "00000".equals(response.getCode()) ? "success" : "failure";
+        Map<String, String> labels = Map.of(
+                "service", service == null ? "unknown" : service,
+                "outcome", outcome);
+        RpcMetrics.increment("rpc_server_requests_total", labels);
+        RpcMetrics.observeMillis("rpc_server_request_duration_milliseconds", labels, elapsedMillis);
         ctx.writeAndFlush(JSONObject.toJSONString(response) + "\r\n");
     }
 
-    @Override
-    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
-        if (evt instanceof IdleStateEvent) {
-            IdleState state = ((IdleStateEvent) evt).state();
-            if (state == IdleState.WRITER_IDLE) {
-                ctx.writeAndFlush(
-                        HeartbeatMessage.PING + HeartbeatMessage.LINE_DELIMITER
-                );
-                return;
-            }
-            if (state == IdleState.READER_IDLE) {
-                System.out.println("客户端心跳超时，关闭连接：" + ctx.channel().remoteAddress());
-                ctx.close();
-                return;
-            }
-        }
-        ctx.fireUserEventTriggered(evt);
-    }
 }

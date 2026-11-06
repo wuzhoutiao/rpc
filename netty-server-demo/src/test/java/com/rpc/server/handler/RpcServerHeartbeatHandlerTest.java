@@ -10,11 +10,11 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
-public class RpcServerHandlerTest {
+public class RpcServerHeartbeatHandlerTest {
 
     @Test
     public void pongDoesNotEnterRpcRequestProcessing() {
-        EmbeddedChannel channel = new EmbeddedChannel(new RpcServerHandler());
+        EmbeddedChannel channel = new EmbeddedChannel(new RpcServerHeartbeatHandler());
 
         assertFalse(channel.writeInbound(HeartbeatMessage.PONG));
         assertNull(channel.readOutbound());
@@ -23,8 +23,22 @@ public class RpcServerHandlerTest {
     }
 
     @Test
+    public void pingIsRepliedWithoutEnteringRpcRequestProcessing() {
+        EmbeddedChannel channel = new EmbeddedChannel(new RpcServerHeartbeatHandler());
+
+        assertFalse(channel.writeInbound(HeartbeatMessage.PING));
+        assertEquals(
+                HeartbeatMessage.PONG + HeartbeatMessage.LINE_DELIMITER,
+                channel.readOutbound()
+        );
+        assertNull(channel.readInbound());
+
+        channel.finishAndReleaseAll();
+    }
+
+    @Test
     public void writerIdleSendsPing() {
-        EmbeddedChannel channel = new EmbeddedChannel(new RpcServerHandler());
+        EmbeddedChannel channel = new EmbeddedChannel(new RpcServerHeartbeatHandler());
 
         channel.pipeline().fireUserEventTriggered(
                 IdleStateEvent.WRITER_IDLE_STATE_EVENT
@@ -39,7 +53,7 @@ public class RpcServerHandlerTest {
 
     @Test
     public void readerIdleClosesUnresponsiveConnection() {
-        EmbeddedChannel channel = new EmbeddedChannel(new RpcServerHandler());
+        EmbeddedChannel channel = new EmbeddedChannel(new RpcServerHeartbeatHandler());
 
         assertTrue(channel.isActive());
         channel.pipeline().fireUserEventTriggered(

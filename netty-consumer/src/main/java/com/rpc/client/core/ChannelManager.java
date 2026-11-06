@@ -14,10 +14,23 @@ public class ChannelManager {
     private static final ConcurrentHashMap<String, Channel> channels=new ConcurrentHashMap<>(); //已经连接成功的服务器，其中key:服务器地址，value:对应的netty channel
     private static final Set<String> connectingServers = ConcurrentHashMap.newKeySet(); //正在建立连接的服务器
     private static volatile Set<String> latestServers = Collections.emptySet();//Zookeeper 最新的服务器列表
-    private static volatile  List<Channel> channelSnapshot= Collections.emptyList();//保存固定顺序的连接快照，供轮询使用
     private static final ConcurrentHashMap<String, AtomicInteger> servicePositions =
             new ConcurrentHashMap<>();//每个 RPC 服务独立轮询，避免不同服务互相推进计数
     private static volatile boolean shuttingDown = false;// RPC 客户端是否已经进入关闭流程
+    private static final ConcurrentHashMap<String, NodeHealth> nodeHealth = new ConcurrentHashMap<>();
+
+    public static final class NodeEndpoint {
+        private final String address;
+        private final Channel channel;
+
+        private NodeEndpoint(String address, Channel channel) {
+            this.address = address;
+            this.channel = channel;
+        }
+
+        public String getAddress() { return address; }
+        public Channel getChannel() { return channel; }
+    }
 
     public static synchronized void updateChannels(Set<String> newServers, Bootstrap bootstrap){
         if (shuttingDown) {
@@ -33,6 +46,7 @@ public class ChannelManager {
                 if(channel!=null){
                     channel.close();
                 }
+                nodeHealth.remove(oldServer);
                 System.out.println("服务端下线：" + oldServer);
             }
         }
@@ -41,7 +55,6 @@ public class ChannelManager {
         for(String server:newServers){
             connectServer(server,bootstrap);}
 
-        refreshSnapshot();
     }
 
     private static void connectServer(String server, Bootstrap bootstrap){
@@ -85,7 +98,6 @@ public class ChannelManager {
                             synchronized (ChannelManager.class){
                                 //只删除当前断开的 channel
                                 channels.remove(server,newChannel);
-                                refreshSnapshot();
                                 reconnect = !shuttingDown && latestServers.contains(server);
                             }
                             System.out.println("连接已断开："+server);
@@ -93,7 +105,6 @@ public class ChannelManager {
                                 scheduleReconnect(server,bootstrap);
                             }
                         });
-                        refreshSnapshot();
                         System.out.println(("异步连接成功："+server));
                     }else{
                         System.err.println("异步连接失败："+server);
@@ -167,84 +178,63 @@ public class ChannelManager {
 
 
 
-    /**
-     * 根据 RPC 接口名称选择可用连接
-     *
-     * @param serviceName RPC 接口完整名称
-     * @return 可用的 Netty Channel
-     */
-    public static Channel getChannel(String serviceName) {
-
-        // 1. 判断客户端是否正在关闭
-        if (shuttingDown) {
-            throw new IllegalStateException(
-                    "RPC 客户端正在关闭，无法发送请求"
-            );
-        }
-
-        // 2. 获取提供该接口的服务器列表
-        Set<String> servers = NettyClient.getServers(serviceName);
-
-        if (servers.isEmpty()) {
-            throw new IllegalStateException(
-                    "没有发现 RPC 服务：" + serviceName
-            );
-        }
-
-        // 3. 将服务器地址排序，保证轮询顺序稳定
-        List<String> addresses = new ArrayList<>(servers);
-
-        Collections.sort(addresses);
-
-        // 4. 计算轮询起始位置
-        int size = addresses.size();
-
-        AtomicInteger servicePosition = servicePositions.computeIfAbsent(
-                serviceName,
-                key -> new AtomicInteger(0)
-        );
-
-        int start = Math.floorMod(
-                servicePosition.getAndIncrement(),
-                size
-        );
-
-        // 5. 从该接口对应的服务器中选择可用 Channel
-        for (int i = 0; i < size; i++) {
-
-            int index = (start + i) % size;
-
-            String address = addresses.get(index);
-
-            Channel channel = channels.get(address);
-
-            if (channel != null && channel.isActive()) {
-                return channel;
-            }
-        }
-
-        // 6. 该接口对应的服务器都不可用
-        throw new IllegalStateException(
-                "RPC 服务暂无可用连接：" + serviceName
-        );
+    /** 选择未尝试过且熔断器允许的节点，优先低延迟、低并发节点。 */
+    public static NodeEndpoint selectNode(String serviceName, Set<String> excludedAddresses) {
+        return selectNodeInternal(serviceName, new HashSet<>(excludedAddresses));
     }
 
-
-    //当服务器列表发生变化时，更新Map，重新生成快照
-    private static void refreshSnapshot(){
-        List<String> addresses=new ArrayList<>(channels.keySet());
-
-        Collections.sort(addresses); //按服务器地址排序
-
-        List<Channel> snapshot=new ArrayList<>();
-
-        for(String address:addresses){
+    private static NodeEndpoint selectNodeInternal(String serviceName, Set<String> excludedAddresses) {
+        List<String> addresses = new ArrayList<>(NettyClient.getServers(serviceName));
+        Collections.sort(addresses);
+        if (addresses.isEmpty()) {
+            return null;
+        }
+        AtomicInteger position = servicePositions.computeIfAbsent(serviceName, key -> new AtomicInteger());
+        int start = Math.floorMod(position.getAndIncrement(), addresses.size());
+        NodeEndpoint best = null;
+        NodeHealth bestHealth = null;
+        double bestScore = Double.MAX_VALUE;
+        for (int i = 0; i < addresses.size(); i++) {
+            String address = addresses.get((start + i) % addresses.size());
+            if (excludedAddresses.contains(address)) {
+                continue;
+            }
             Channel channel = channels.get(address);
-            if(channel!=null&&channel.isActive()){
-                snapshot.add(channel);
+            if (channel == null || !channel.isActive()) {
+                continue;
+            }
+            NodeHealth health = nodeHealth.computeIfAbsent(address, ignored -> new NodeHealth());
+            double score = health.score();
+            if (score < bestScore) {
+                best = new NodeEndpoint(address, channel);
+                bestHealth = health;
+                bestScore = score;
             }
         }
-        channelSnapshot=Collections.unmodifiableList(snapshot);
+        if (best == null || !bestHealth.tryAcquire()) {
+            // 最优节点可能正处于 OPEN/HALF_OPEN，继续寻找其他可用节点。
+            if (best != null) {
+                excludedAddresses.add(best.address);
+                return selectNodeInternal(serviceName, excludedAddresses);
+            }
+            return null;
+        }
+        return best;
+    }
+
+    public static boolean recordResult(NodeEndpoint endpoint, boolean success, long latencyMillis) {
+        NodeHealth health = nodeHealth.computeIfAbsent(endpoint.address, ignored -> new NodeHealth());
+        return health.complete(success, latencyMillis);
+    }
+
+    public static boolean hasActiveNode(String serviceName) {
+        for (String address : NettyClient.getServers(serviceName)) {
+            Channel channel = channels.get(address);
+            if (channel != null && channel.isActive()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -264,10 +254,7 @@ public class ChannelManager {
         // 2. 清空服务器列表
         latestServers = Collections.emptySet();
 
-        // 3. 清空连接快照
-        channelSnapshot = Collections.emptyList();
-
-        // 4. 关闭所有已有连接
+        // 3. 关闭所有已有连接
         for (Channel channel : channels.values()) {
 
             if (channel != null) {
@@ -275,14 +262,15 @@ public class ChannelManager {
             }
         }
 
-        // 5. 清空连接池
+        // 4. 清空连接池
         channels.clear();
 
-        // 6. 清空正在连接的服务器记录
+        // 5. 清空正在连接的服务器记录
         connectingServers.clear();
 
-        // 7. 清空各服务的轮询位置
+        // 6. 清空各服务的轮询位置
         servicePositions.clear();
+        nodeHealth.clear();
 
         System.out.println("ChannelManager 已发起所有连接的关闭");
     }

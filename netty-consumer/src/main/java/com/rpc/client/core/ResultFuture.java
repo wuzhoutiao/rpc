@@ -11,6 +11,7 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 public class ResultFuture {
+    private static final boolean VERBOSE = Boolean.getBoolean("rpc.verbose");
 
     // 保存正在等待响应的 RPC 请求
     private static final ConcurrentHashMap<Long, ResultFuture> map =
@@ -26,8 +27,7 @@ public class ResultFuture {
     // 请求是否已经完成
     private boolean completed = false;
 
-    // 超时时间：120 秒
-    private final long timeOut = 2 * 60 * 1000L;
+    private final long timeOut;
 
     // 请求开始时间
     private final long startTime = System.currentTimeMillis();
@@ -42,8 +42,13 @@ public class ResultFuture {
     private static volatile boolean shuttingDown = false;
 
     public ResultFuture(Request request) {
+        this(request, RpcClientConfig.REQUEST_TIMEOUT_MILLIS);
+    }
+
+    public ResultFuture(Request request, long timeoutMillis) {
 
         this.requestId = request.getId();
+        this.timeOut = timeoutMillis;
 
         synchronized (LIFECYCLE_LOCK) {
 
@@ -72,8 +77,12 @@ public class ResultFuture {
 
         try {
 
-            while (!completed) {
-                condition.await();
+            long remainingNanos = TimeUnit.MILLISECONDS.toNanos(timeOut);
+            while (!completed && remainingNanos > 0) {
+                remainingNanos = condition.awaitNanos(remainingNanos);
+            }
+            if (!completed) {
+                complete(createTimeoutResponse());
             }
 
             return response;
@@ -138,10 +147,10 @@ public class ResultFuture {
             // 唤醒等待线程
             condition.signalAll();
 
-            System.out.println(
-                    "RPC 请求完成，requestId = " + requestId
-                            + "，code = " + response.getCode()
-            );
+            if (VERBOSE) {
+                System.out.println("RPC 请求完成，requestId = " + requestId
+                        + "，code = " + response.getCode());
+            }
 
         } finally {
 

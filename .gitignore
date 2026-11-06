@@ -1,6 +1,7 @@
 # Maven build output
 target/
 **/target/
+load-test-results/
 
 # IDE metadata
 .idea/

@@ -4,6 +4,9 @@ import com.rpc.server.constants.Constants;
 import com.rpc.server.factory.ZooKeeperFactory;
 import com.rpc.server.handler.RpcServerChannelInitializer;
 import com.rpc.server.medium.RpcRequestDispatcher;
+import com.rpc.api.protocol.RpcMethodSignature;
+import com.rpc.api.metrics.RpcMetrics;
+import com.rpc.server.testing.FaultInjector;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelOption;
@@ -28,6 +31,7 @@ public class NettyServer implements ApplicationListener<ContextRefreshedEvent> {
     private NioEventLoopGroup workerGroup;
     private DefaultEventExecutorGroup businessGroup;
     private Channel serverChannel;
+    private RpcMetrics.Endpoint metricsEndpoint;
 
     @Override
     public synchronized void onApplicationEvent(ContextRefreshedEvent event) {
@@ -49,6 +53,18 @@ public class NettyServer implements ApplicationListener<ContextRefreshedEvent> {
                 .childHandler(new RpcServerChannelInitializer(businessGroup));
 
             serverChannel = serverBootstrap.bind(Constants.SERVER_PORT).sync().channel();
+            System.out.println("RPC 服务端已监听端口 " + Constants.SERVER_PORT
+                    + "，故障注入配置：" + FaultInjector.description());
+
+            if (Boolean.parseBoolean(System.getProperty("rpc.metrics.enabled", "true"))) {
+                int metricsPort = Integer.getInteger("rpc.server.metrics.port", 9091);
+                try {
+                    metricsEndpoint = RpcMetrics.startEndpoint(metricsPort);
+                    System.out.println("服务端 Prometheus 指标：http://127.0.0.1:" + metricsPort + "/metrics");
+                } catch (Exception metricsError) {
+                    System.err.println("服务端指标端点启动失败：" + metricsError.getMessage());
+                }
+            }
 
             System.out.println("准备注册 RPC 服务");
 
@@ -61,12 +77,8 @@ public class NettyServer implements ApplicationListener<ContextRefreshedEvent> {
 
                 for (String command : RpcRequestDispatcher.getCommands()) {
 
-                    // 例如 remote.UserRemote.getUser
-                    // 提取 remote.UserRemote
-                    int lastDotIndex = command.lastIndexOf(".");
-
-                    if (lastDotIndex > 0) {
-                        String serviceName = command.substring(0, lastDotIndex);
+                    String serviceName = RpcMethodSignature.serviceName(command);
+                    if (serviceName != null) {
                         serviceNames.add(serviceName);
                     }
                 }
@@ -103,6 +115,10 @@ public class NettyServer implements ApplicationListener<ContextRefreshedEvent> {
 
     @PreDestroy
     public synchronized void shutdown() {
+        if (metricsEndpoint != null) {
+            metricsEndpoint.close();
+            metricsEndpoint = null;
+        }
         if (serverChannel != null) {
             serverChannel.close().syncUninterruptibly();
             serverChannel = null;

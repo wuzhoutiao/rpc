@@ -10,4 +10,8 @@ public interface UserRemote {
     Response saveUser(User user);
 
     Response saveUsers(List<User> users);
+
+    Response findUser(long id);
+
+    Response findUser(long id, String name);
 }

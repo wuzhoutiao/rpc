@@ -2,7 +2,7 @@ package com.rpc.server.constants;
 
 public class Constants {
     public static final String SERVER_PATH = "/netty";
-    public static final int SERVER_PORT = 8081;
+    public static final int SERVER_PORT = Integer.getInteger("rpc.server.port", 8081);
 
     public static final String SUCCESS = "00000";
     public static final String TIMEOUT = "10001";

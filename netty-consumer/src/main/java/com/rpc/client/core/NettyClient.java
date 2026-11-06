@@ -1,7 +1,11 @@
 package com.rpc.client.core;
 
+import com.rpc.api.metrics.RpcMetrics;
 import com.rpc.api.protocol.Request;
 import com.rpc.api.protocol.Response;
+import com.rpc.api.protocol.RpcMethodSignature;
+import com.rpc.api.protocol.HeartbeatMessage;
+import com.rpc.client.constants.Constants;
 import com.rpc.client.handler.RpcClientChannelInitializer;
 import com.rpc.client.zk.ServerWatcher;
 import com.rpc.client.zk.ZooKeeperFactory;
@@ -11,6 +15,9 @@ import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import java.util.Set;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 
 public class NettyClient {
@@ -25,6 +32,8 @@ public class NettyClient {
     // 客户端是否正在关闭
     private static volatile boolean shuttingDown = false;
     private static volatile boolean initialized = false;
+    private static final AtomicLong REQUEST_ID = new AtomicLong();
+    private static RpcMetrics.Endpoint metricsEndpoint;
 
     public static synchronized void initialize() {
         if (initialized) {
@@ -41,6 +50,7 @@ public class NettyClient {
             ZooKeeperFactory.getClient();
             // 首次读取所有 RPC 服务，并注册 Watcher
             serverWatcher.refreshServices();
+            startMetrics();
             initialized = true;
             System.out.println("RPC 客户端初始化完成");
 
@@ -69,54 +79,105 @@ public class NettyClient {
             );
         }
 
-        // 2. 从 command 中提取接口名称
-        // 例如：remote.UserRemote.getUser
-        int lastDotIndex = command.lastIndexOf(".");
-
-        if (lastDotIndex <= 0 || lastDotIndex == command.length() - 1) {
+        // 2. 从包含参数类型的方法签名中提取接口名称
+        String serviceName = RpcMethodSignature.serviceName(command);
+        if (serviceName == null) {
             throw new IllegalArgumentException(
                     "无效的 RPC 命令：" + command
             );
         }
 
-        String serviceName = command.substring(0, lastDotIndex);
+        if (!RpcRateLimiter.tryAcquire(serviceName)) {
+            RpcMetrics.increment("rpc_client_rate_limited_total", Map.of("service", serviceName));
+            return errorResponse(request, Constants.RATE_LIMITED, "客户端限流：请求过多");
+        }
 
-        // 3. 根据接口名称选择服务器
-        Channel channel = ChannelManager.getChannel(serviceName);
-
-        // 4. 注册等待对象
-        ResultFuture resultFuture = new ResultFuture(request);
-
-        // 5. 异步发送请求
-        ChannelFuture future = channel.writeAndFlush(
-                JSONObject.toJSONString(request) + "\r\n"
-        );
-
-        // 6. 监听发送结果
-        future.addListener((ChannelFutureListener) f -> {
-
-            if (!f.isSuccess()) {
-
-                System.err.println(
-                        "RPC 请求发送失败，requestId = " + request.getId()
-                );
-
-                if (f.cause() != null) {
-                    f.cause().printStackTrace();
-                }
-
-                Response response = new Response();
-
-                response.setId(request.getId());
-                response.setCode("RPC_SEND_FAILED");
-                response.setMessage("RPC 请求发送失败");
-
-                ResultFuture.receive(response);
+        Set<String> attemptedNodes = new HashSet<>();
+        Response lastResponse = null;
+        for (int attempt = 1; attempt <= RpcClientConfig.MAX_ATTEMPTS; attempt++) {
+            ChannelManager.NodeEndpoint endpoint = ChannelManager.selectNode(serviceName, attemptedNodes);
+            if (endpoint == null) {
+                break;
             }
-        });
+            attemptedNodes.add(endpoint.getAddress());
+            request.setId(REQUEST_ID.incrementAndGet());
+            long attemptRequestId = request.getId();
+            ResultFuture resultFuture = new ResultFuture(request, RpcClientConfig.REQUEST_TIMEOUT_MILLIS);
+            long startNanos = System.nanoTime();
+            ChannelFuture future = endpoint.getChannel().writeAndFlush(
+                    JSONObject.toJSONString(request) + HeartbeatMessage.LINE_DELIMITER
+            );
+            future.addListener((ChannelFutureListener) f -> {
+                if (!f.isSuccess()) {
+                    Response response = new Response();
+                    response.setId(attemptRequestId);
+                    response.setCode("RPC_SEND_FAILED");
+                    response.setMessage("RPC 请求发送失败");
+                    ResultFuture.receive(response);
+                }
+            });
 
-        // 7. 等待响应
-        return resultFuture.get();
+            Response response = resultFuture.get();
+            long latencyMillis = (System.nanoTime() - startNanos) / 1_000_000L;
+            boolean success = Constants.SUCCESS.equals(response.getCode());
+            boolean retryableFailure = isRetriable(response);
+            boolean circuitOpened = ChannelManager.recordResult(endpoint, !retryableFailure, latencyMillis);
+            Map<String, String> metricLabels = Map.of(
+                    "service", serviceName,
+                    "node", endpoint.getAddress(),
+                    "outcome", success ? "success" : "failure");
+            RpcMetrics.increment("rpc_client_requests_total", metricLabels);
+            RpcMetrics.observeMillis("rpc_client_request_duration_milliseconds", metricLabels, latencyMillis);
+            if (circuitOpened) {
+                RpcClientStats.recordCircuitOpen();
+                RpcMetrics.increment("rpc_client_circuit_open_total", Map.of("node", endpoint.getAddress()));
+                System.err.println("节点熔断：" + endpoint.getAddress());
+            }
+            if (success || !retryableFailure) {
+                return response;
+            }
+            lastResponse = response;
+            RpcClientStats.recordRetry();
+            RpcMetrics.increment("rpc_client_retries_total", Map.of("service", serviceName));
+            System.err.println("RPC 调用失败，切换节点重试：node=" + endpoint.getAddress()
+                    + "，attempt=" + attempt + "，code=" + response.getCode());
+        }
+
+        if (lastResponse != null) {
+            return lastResponse;
+        }
+        if (attemptedNodes.isEmpty() && ChannelManager.hasActiveNode(serviceName)) {
+            RpcClientStats.recordCircuitRejection();
+            return errorResponse(request, Constants.CIRCUIT_OPEN, "节点熔断中，拒绝请求");
+        }
+        return errorResponse(request, Constants.NO_HEALTHY_NODE, "没有可用的健康节点");
+    }
+
+    private static boolean isRetriable(Response response) {
+        return Constants.TIMEOUT.equals(response.getCode())
+                || Constants.FAILURE.equals(response.getCode())
+                || "RPC_SEND_FAILED".equals(response.getCode());
+    }
+
+    private static void startMetrics() {
+        if (!Boolean.parseBoolean(System.getProperty("rpc.metrics.enabled", "true"))) {
+            return;
+        }
+        int metricsPort = Integer.getInteger("rpc.client.metrics.port", 9092);
+        try {
+            metricsEndpoint = RpcMetrics.startEndpoint(metricsPort);
+            System.out.println("客户端 Prometheus 指标：http://127.0.0.1:" + metricsPort + "/metrics");
+        } catch (Exception e) {
+            System.err.println("客户端指标端点启动失败：" + e.getMessage());
+        }
+    }
+
+    private static Response errorResponse(Request request, String code, String message) {
+        Response response = new Response();
+        response.setId(request.getId() == null ? 0L : request.getId());
+        response.setCode(code);
+        response.setMessage(message);
+        return response;
     }
 
     public static boolean isShuttingDown() {
@@ -146,7 +207,13 @@ public class NettyClient {
         ZooKeeperFactory.close();
         System.out.println("ZooKeeper 客户端已关闭");
 
-        // 5. 关闭 Netty 线程组
+        // 5. 关闭指标端点
+        if (metricsEndpoint != null) {
+            metricsEndpoint.close();
+            metricsEndpoint = null;
+        }
+
+        // 6. 关闭 Netty 线程组
         worker.shutdownGracefully();
 
         System.out.println("Netty 线程组已发起关闭");
@@ -159,6 +226,13 @@ public class NettyClient {
     public static Set<String> getServers(String serviceName) {
 
         return serverWatcher.getServers(serviceName);
+    }
+
+    /** 压测就绪等待和服务发现异常恢复时主动刷新一次注册信息。 */
+    public static void refreshServices() throws Exception {
+        if (!shuttingDown) {
+            serverWatcher.refreshServices();
+        }
     }
 
 }

@@ -7,6 +7,7 @@ import com.rpc.server.constants.Constants;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Type;
 import java.util.Collections;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -48,10 +49,18 @@ public class RpcRequestDispatcher {
             }
             Object bean = rpcMethod.getBean();
             Method method = rpcMethod.getMethod();
-            Class<?> type = method.getParameterTypes()[0]; //先只实现只有一个参数的方法
-            Object content = request.getContent(); //拿到请求的泛型对象
-            Object args = JSONObject.parseObject(JSONObject.toJSONString(content),type); //先转换为JSON字符串，然后再按真正的参数类型反序列化
-            result = (Response) method.invoke(bean,args); //把业务方法返回的Response对象，赋值给局部变量result
+            Object[] arguments = request.getArguments();
+            Type[] parameterTypes = method.getGenericParameterTypes();
+            if (arguments.length != parameterTypes.length) {
+                throw new IllegalArgumentException(
+                        "参数数量不匹配，期望 " + parameterTypes.length + "，实际 " + arguments.length);
+            }
+            Object[] convertedArguments = new Object[arguments.length];
+            for (int i = 0; i < arguments.length; i++) {
+                convertedArguments[i] = JSONObject.parseObject(
+                        JSONObject.toJSONString(arguments[i]), parameterTypes[i]);
+            }
+            result = (Response) method.invoke(bean, convertedArguments);
             result.setId(request.getId());
         }catch(Exception e){
             e.printStackTrace();

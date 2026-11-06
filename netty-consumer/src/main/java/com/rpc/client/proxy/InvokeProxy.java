@@ -1,6 +1,7 @@
 package com.rpc.client.proxy;
 
 import com.rpc.api.protocol.Request;
+import com.rpc.api.protocol.RpcMethodSignature;
 import com.rpc.client.annotation.RemoteInvoke;
 import com.rpc.client.core.NettyClient;
 
@@ -10,12 +11,10 @@ import org.springframework.stereotype.Component;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Proxy;
-import java.util.concurrent.atomic.AtomicLong;
 
 @Component
 public class InvokeProxy implements BeanPostProcessor {
-
-    private static final AtomicLong REQUEST_ID = new AtomicLong(0);
+    private static final boolean VERBOSE = Boolean.getBoolean("rpc.verbose");
 
     @Override
     public Object postProcessBeforeInitialization(
@@ -63,25 +62,21 @@ public class InvokeProxy implements BeanPostProcessor {
                         }
 
                         Request request = new Request();
-                        request.setId(REQUEST_ID.incrementAndGet());
-
-                        // 当前 RPC 协议暂时只支持单参数
-                        if (args == null || args.length != 1) {
-                            throw new UnsupportedOperationException(
-                                    "当前 RPC 框架只支持单参数方法：" + method.getName()
-                            );
+                        request.setArguments(args == null ? new Object[0] : args);
+                        Class<?>[] parameterTypes = method.getParameterTypes();
+                        String[] parameterTypeNames = new String[parameterTypes.length];
+                        for (int i = 0; i < parameterTypes.length; i++) {
+                            parameterTypeNames[i] = parameterTypes[i].getName();
                         }
+                        request.setParameterTypeNames(parameterTypeNames);
 
-                        request.setContent(args[0]);
-
-                        String command =
-                                clazz.getName() + "." + method.getName();
+                        String command = RpcMethodSignature.of(clazz, method);
 
                         request.setCommand(command);
 
-                        System.out.println(
-                                "客户端发送 command = " + command
-                        );
+                        if (VERBOSE) {
+                            System.out.println("客户端发送 command = " + command);
+                        }
 
                         return NettyClient.send(request);
                     }

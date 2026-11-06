@@ -1,5 +1,6 @@
 package com.rpc.server.handler;
 
+import com.rpc.api.protocol.HeartbeatMessage;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.codec.DelimiterBasedFrameDecoder;
@@ -26,8 +27,14 @@ public class RpcServerChannelInitializer extends ChannelInitializer<NioSocketCha
         ch.pipeline().addLast(new DelimiterBasedFrameDecoder(Integer.MAX_VALUE, Delimiters.lineDelimiter()[0])); // 设置\r\n为切割消息的分隔符
         ch.pipeline().addLast(new StringDecoder());//字符串解码器
         ch.pipeline().addLast(new StringEncoder());//字符串编码器，把字符串转换为字节
-        // 15 秒没有写数据时发送 ping；45 秒没有收到客户端数据时关闭失活连接
-        ch.pipeline().addLast(new IdleStateHandler(45, 15, 0, TimeUnit.SECONDS));
+        ch.pipeline().addLast(new IdleStateHandler(
+                HeartbeatMessage.READER_IDLE_SECONDS,
+                HeartbeatMessage.WRITER_IDLE_SECONDS,
+                0,
+                TimeUnit.SECONDS
+        ));
+        // 心跳留在 I/O 线程处理，避免耗时 RPC 业务阻塞探活和超时关闭
+        ch.pipeline().addLast(new RpcServerHeartbeatHandler());
         ch.pipeline().addLast(businessGroup, new RpcServerHandler());//业务逻辑处理处
     }
 }

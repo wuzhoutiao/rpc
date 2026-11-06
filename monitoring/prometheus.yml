@@ -1,0 +1,10 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: rpc-server
+    static_configs:
+      - targets: ["host.docker.internal:9091"]
+  - job_name: rpc-client
+    static_configs:
+      - targets: ["host.docker.internal:9092"]
