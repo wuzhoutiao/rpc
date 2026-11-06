@@ -1,11 +1,11 @@
 package com.rpc.service.service;
 
-import bean.User;
-import client.annotation.RemoteInvoke;
-import com.rpc.common.protocol.Response;
+import com.rpc.api.model.User;
+import com.rpc.api.protocol.Response;
+import com.rpc.api.service.UserRemote;
+import com.rpc.client.annotation.RemoteInvoke;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
-import remote.UserRemote;
 
 @Service
 public class ClientService {

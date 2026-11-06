@@ -5,8 +5,8 @@ import org.springframework.context.annotation.Configuration;
 
 @Configuration
 @ComponentScan(basePackages = {
-        "client",
-        "com/rpc/service"
+        "com.rpc.client",
+        "com.rpc.service"
 })
 public class ClientConfig {
 }

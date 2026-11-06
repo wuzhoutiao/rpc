@@ -14,12 +14,4 @@
 
     <artifactId>rpc-api</artifactId>
 
-    <dependencies>
-        <dependency>
-            <groupId>com.rpc</groupId>
-            <artifactId>rpc-common</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-    </dependencies>
-
 </project>
