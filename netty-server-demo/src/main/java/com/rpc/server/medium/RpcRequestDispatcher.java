@@ -2,7 +2,7 @@ package com.rpc.server.medium;
 
 import com.alibaba.fastjson.JSONObject;
 import com.rpc.api.protocol.Request;
-import com.rpc.api.protocol.Response;
+import com.rpc.api.protocol.RpcResponse;
 import com.rpc.server.constants.Constants;
 
 import java.lang.reflect.InvocationTargetException;
@@ -36,16 +36,16 @@ public class RpcRequestDispatcher {
     }
 
     /* 获得请求，判断是否在服务端找到该方法，如果没找到则返回错误码，如果找到了就反射调用返回结果*/
-    public Response process(Request request){
-        Response result = new Response();
+    public RpcResponse process(Request request){
+        RpcResponse response = new RpcResponse();
         try{
             String command = request.getCommand();
             RpcMethod rpcMethod = METHOD_MAP.get(command);
             if(rpcMethod == null){
-                result.setCode(Constants.METHOD_NOT_FOUND);
-                result.setMessage("在服务端未找到客户端请求的方法");
-                result.setId(request.getId());
-                return result;
+                response.setCode(Constants.METHOD_NOT_FOUND);
+                response.setMessage("在服务端未找到客户端请求的方法");
+                response.setId(request.getId());
+                return response;
             }
             Object bean = rpcMethod.getBean();
             Method method = rpcMethod.getMethod();
@@ -60,21 +60,22 @@ public class RpcRequestDispatcher {
                 convertedArguments[i] = JSONObject.parseObject(
                         JSONObject.toJSONString(arguments[i]), parameterTypes[i]);
             }
-            result = (Response) method.invoke(bean, convertedArguments);
-            result.setId(request.getId());
+            Object businessResult = method.invoke(bean, convertedArguments);
+            response.setResult(businessResult);
+            response.setId(request.getId());
         }catch(Exception e){
             e.printStackTrace();
 
-            result = new Response();
-            result.setCode(Constants.FAILURE);
-            result.setMessage(getErrorMessage(e));
+            response = new RpcResponse();
+            response.setCode(Constants.FAILURE);
+            response.setMessage(getErrorMessage(e));
 
             // 即使业务方法调用失败，也必须回传原请求 ID，客户端才能唤醒对应的 ResultFuture
             if (request != null && request.getId() != null) {
-                result.setId(request.getId());
+                response.setId(request.getId());
             }
         }
-        return result;
+        return response;
     }
 
     private String getErrorMessage(Exception exception) {

@@ -2,7 +2,7 @@ package com.rpc.client.core;
 
 import com.rpc.api.metrics.RpcMetrics;
 import com.rpc.api.protocol.Request;
-import com.rpc.api.protocol.Response;
+import com.rpc.api.protocol.RpcResponse;
 import com.rpc.api.protocol.RpcMethodSignature;
 import com.rpc.api.protocol.HeartbeatMessage;
 import com.rpc.client.constants.Constants;
@@ -64,7 +64,7 @@ public class NettyClient {
         return bootstrap;
     }
 
-    public static Response send(Request request) {
+    public static RpcResponse send(Request request) {
 
         if (!initialized) {
             throw new IllegalStateException("RPC 客户端尚未初始化");
@@ -93,7 +93,7 @@ public class NettyClient {
         }
 
         Set<String> attemptedNodes = new HashSet<>();
-        Response lastResponse = null;
+        RpcResponse lastResponse = null;
         for (int attempt = 1; attempt <= RpcClientConfig.MAX_ATTEMPTS; attempt++) {
             ChannelManager.NodeEndpoint endpoint = ChannelManager.selectNode(serviceName, attemptedNodes);
             if (endpoint == null) {
@@ -109,7 +109,7 @@ public class NettyClient {
             );
             future.addListener((ChannelFutureListener) f -> {
                 if (!f.isSuccess()) {
-                    Response response = new Response();
+                    RpcResponse response = new RpcResponse();
                     response.setId(attemptRequestId);
                     response.setCode("RPC_SEND_FAILED");
                     response.setMessage("RPC 请求发送失败");
@@ -117,7 +117,7 @@ public class NettyClient {
                 }
             });
 
-            Response response = resultFuture.get();
+            RpcResponse response = resultFuture.get();
             long latencyMillis = (System.nanoTime() - startNanos) / 1_000_000L;
             boolean success = Constants.SUCCESS.equals(response.getCode());
             boolean retryableFailure = isRetriable(response);
@@ -131,7 +131,8 @@ public class NettyClient {
             if (circuitOpened) {
                 RpcClientStats.recordCircuitOpen();
                 RpcMetrics.increment("rpc_client_circuit_open_total", Map.of("node", endpoint.getAddress()));
-                System.err.println("节点熔断：" + endpoint.getAddress());
+                System.err.println("节点熔断：" + endpoint.getAddress()
+                        + "，code=" + response.getCode() + "，latencyMs=" + latencyMillis);
             }
             if (success || !retryableFailure) {
                 return response;
@@ -153,7 +154,7 @@ public class NettyClient {
         return errorResponse(request, Constants.NO_HEALTHY_NODE, "没有可用的健康节点");
     }
 
-    private static boolean isRetriable(Response response) {
+    private static boolean isRetriable(RpcResponse response) {
         return Constants.TIMEOUT.equals(response.getCode())
                 || Constants.FAILURE.equals(response.getCode())
                 || "RPC_SEND_FAILED".equals(response.getCode());
@@ -172,8 +173,8 @@ public class NettyClient {
         }
     }
 
-    private static Response errorResponse(Request request, String code, String message) {
-        Response response = new Response();
+    private static RpcResponse errorResponse(Request request, String code, String message) {
+        RpcResponse response = new RpcResponse();
         response.setId(request.getId() == null ? 0L : request.getId());
         response.setCode(code);
         response.setMessage(message);

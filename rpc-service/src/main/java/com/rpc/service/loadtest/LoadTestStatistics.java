@@ -1,6 +1,5 @@
 package com.rpc.service.loadtest;
 
-import com.rpc.api.protocol.Response;
 import com.rpc.client.constants.Constants;
 import com.rpc.client.core.RpcClientConfig;
 import com.rpc.client.core.RpcClientStats;
@@ -31,17 +30,18 @@ public final class LoadTestStatistics {
         latencyBuckets = new AtomicLongArray(Math.max(1001, maxMillis * BUCKETS_PER_MILLISECOND + 2));
     }
 
-    public void record(Response response, long elapsedMicros, boolean postFault) {
+    public void recordSuccess(long elapsedMicros, boolean postFault) {
         recordLatency(elapsedMicros);
         total.increment();
-        if (response != null && Constants.SUCCESS.equals(response.getCode())) {
-            success.increment();
-            recordPostFault(postFault, true);
-            return;
-        }
+        success.increment();
+        recordPostFault(postFault, true);
+    }
+
+    public void recordFailure(String code, long elapsedMicros, boolean postFault) {
+        recordLatency(elapsedMicros);
+        total.increment();
         failure.increment();
         recordPostFault(postFault, false);
-        String code = response == null ? null : response.getCode();
         if (Constants.TIMEOUT.equals(code)) timeout.increment();
         else if (Constants.RATE_LIMITED.equals(code)) rateLimited.increment();
         else if (Constants.CIRCUIT_OPEN.equals(code)) circuitRejected.increment();

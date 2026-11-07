@@ -1,32 +1,30 @@
 package com.rpc.server.medium;
 
 import com.rpc.api.protocol.Request;
-import com.rpc.api.protocol.Response;
+import com.rpc.api.protocol.RpcResponse;
 import com.rpc.api.protocol.RpcMethodSignature;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
 import java.lang.reflect.Method;
+import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 
 public class RpcRequestDispatcherTest {
 
     interface OverloadedService {
-        Response call();
-        Response call(long id);
-        Response call(long id, String name);
+        String call();
+        String call(long id);
+        String call(long id, String name);
+        List<String> echo(List<String> values);
     }
 
     static class OverloadedServiceImpl implements OverloadedService {
-        public Response call() { return response("zero"); }
-        public Response call(long id) { return response("one:" + id); }
-        public Response call(long id, String name) { return response("two:" + id + ":" + name); }
-        private Response response(String value) {
-            Response response = new Response();
-            response.setResult(value);
-            return response;
-        }
+        public String call() { return "zero"; }
+        public String call(long id) { return "one:" + id; }
+        public String call(long id, String name) { return "two:" + id + ":" + name; }
+        public List<String> echo(List<String> values) { return values; }
     }
 
     @BeforeClass
@@ -58,12 +56,24 @@ public class RpcRequestDispatcherTest {
                 new Class<?>[]{long.class, String.class}, new Object[]{7, "alice"}).getResult());
     }
 
-    private Response invoke(Class<?>[] parameterTypes, Object[] arguments) throws Exception {
+    @Test
+    public void dispatchesGenericBusinessReturnValue() throws Exception {
+        Method method = OverloadedService.class.getMethod("echo", List.class);
+        Request request = request(method, new Object[]{List.of("a", "b")});
+
+        assertEquals(List.of("a", "b"), RpcRequestDispatcher.newInstance().process(request).getResult());
+    }
+
+    private RpcResponse invoke(Class<?>[] parameterTypes, Object[] arguments) throws Exception {
         Method method = OverloadedService.class.getMethod("call", parameterTypes);
+        return RpcRequestDispatcher.newInstance().process(request(method, arguments));
+    }
+
+    private Request request(Method method, Object[] arguments) {
         Request request = new Request();
         request.setId(99L);
         request.setCommand(RpcMethodSignature.of(OverloadedService.class, method));
         request.setArguments(arguments);
-        return RpcRequestDispatcher.newInstance().process(request);
+        return request;
     }
 }

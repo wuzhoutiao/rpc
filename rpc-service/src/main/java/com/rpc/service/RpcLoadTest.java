@@ -1,11 +1,11 @@
 package com.rpc.service;
 
-import com.rpc.api.protocol.Response;
 import com.rpc.api.service.UserRemote;
 import com.rpc.client.core.ChannelManager;
 import com.rpc.client.core.NettyClient;
 import com.rpc.client.core.RpcClientStats;
 import com.rpc.client.constants.Constants;
+import com.rpc.client.exception.RpcException;
 import com.rpc.service.config.ClientConfig;
 import com.rpc.service.loadtest.LoadTestConfig;
 import com.rpc.service.loadtest.LoadTestResult;
@@ -84,13 +84,18 @@ public class RpcLoadTest {
                         long callStart = System.nanoTime();
                         boolean postFault = callStart >= postFaultNanos.get();
                         try {
-                            Response response = client.findRemote(
+                            client.findRemote(
                                     workerId * 1_000_000L + sequence++, "load-test");
                             if (statistics != null) {
-                                statistics.record(response, (System.nanoTime() - callStart) / 1_000L,
-                                        postFault);
+                                statistics.recordSuccess(
+                                        (System.nanoTime() - callStart) / 1_000L, postFault);
                             }
-                            backoffAfterImmediateRejection(response);
+                        } catch (RpcException error) {
+                            if (statistics != null) {
+                                statistics.recordFailure(error.getCode(),
+                                        (System.nanoTime() - callStart) / 1_000L, postFault);
+                            }
+                            backoffAfterImmediateRejection(error.getCode());
                         } catch (Exception error) {
                             if (statistics != null) {
                                 statistics.recordException((System.nanoTime() - callStart) / 1_000L,
@@ -137,9 +142,7 @@ public class RpcLoadTest {
         Files.write(readyFile, "ready".getBytes(StandardCharsets.UTF_8));
     }
 
-    private static void backoffAfterImmediateRejection(Response response) {
-        if (response == null) return;
-        String code = response.getCode();
+    private static void backoffAfterImmediateRejection(String code) {
         if (!Constants.CIRCUIT_OPEN.equals(code)
                 && !Constants.RATE_LIMITED.equals(code)
                 && !Constants.NO_HEALTHY_NODE.equals(code)) {

@@ -1,7 +1,7 @@
 package com.rpc.client.handler;
 
 import com.rpc.api.protocol.HeartbeatMessage;
-import com.rpc.api.protocol.Response;
+import com.rpc.api.protocol.RpcResponse;
 import com.alibaba.fastjson.JSONObject;
 import com.rpc.client.core.ResultFuture;
 import io.netty.channel.ChannelFutureListener;
@@ -29,7 +29,7 @@ public class RpcClientHandler extends ChannelInboundHandlerAdapter {
             return;
         }
 
-        Response response = JSONObject.parseObject(message, Response.class);
+        RpcResponse response = JSONObject.parseObject(message, RpcResponse.class);
         if (VERBOSE) {
             System.out.println("请求 id =" + response.getId() + "的请求，已收到服务端回复");
             System.out.println("回复为:" + JSONObject.toJSONString(response));

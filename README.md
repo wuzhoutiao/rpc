@@ -97,6 +97,16 @@ mvn clean test
 - 支持零参数、单参数和多参数方法。
 - 命令使用 `接口名#方法名(参数类型...)` 完整签名，能够准确路由重载方法。
 - 服务端依据方法的泛型参数类型逐项反序列化，同时保留旧版 `content` 字段兼容能力。
+- 业务接口直接返回领域对象、集合或基础类型；`RpcResponse` 仅作为内部传输协议响应，不再侵入业务 API。
+- 客户端依据方法的泛型返回类型还原结果（例如 `List<User>`）；协议失败统一抛出带错误码和请求 ID 的 `RpcException`。
+
+```java
+public interface UserRemote {
+    User saveUser(User user);
+    List<User> saveUsers(List<User> users);
+    String findUser(long id, String name);
+}
+```
 
 ## 客户端治理
 
@@ -166,6 +176,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-rpc-load-test.ps1 `
 
 每次真实执行结果都会追加到 `load-test-results/rpc-load-results.csv`，包括总请求数、成功/失败、QPS、平均延迟、P50/P95/P99、超时、限流、熔断拒绝、异常、重试和熔断事件。逐请求日志默认关闭，可通过 `-Drpc.verbose=true` 临时开启。
 
+`-SkipBuild` 仅在模块的编译产物仍存在时跳过构建；执行过 `mvn clean` 或首次运行时，脚本会自动重新构建，避免 Provider 因主类缺失而启动失败。
+
 ### 故障验证
 
 故障模式要求脚本管理 Provider，因此必须增加 `-AutoStartDependencies`：
@@ -175,7 +187,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-rpc-load-test.ps1 `
 .\scripts\run-rpc-load-test.ps1 -Mode benchmark `
   -FaultMode provider-down -AutoStartDependencies
 
-# 第二个 Provider 固定延迟 800ms，验证慢节点识别与熔断
+# 预热完成后将第二个 Provider 切换为 800ms 延迟，验证慢节点识别与熔断
 .\scripts\run-rpc-load-test.ps1 -Mode benchmark `
   -FaultMode slow -FaultDelayMs 800 -AutoStartDependencies
 

@@ -1,6 +1,7 @@
 package com.rpc.client.proxy;
 
 import com.rpc.api.protocol.Request;
+import com.rpc.api.protocol.RpcResponse;
 import com.rpc.api.protocol.RpcMethodSignature;
 import com.rpc.client.annotation.RemoteInvoke;
 import com.rpc.client.core.NettyClient;
@@ -78,7 +79,8 @@ public class InvokeProxy implements BeanPostProcessor {
                             System.out.println("客户端发送 command = " + command);
                         }
 
-                        return NettyClient.send(request);
+                        RpcResponse response = NettyClient.send(request);
+                        return RpcResultDecoder.decode(response, method);
                     }
             );
 

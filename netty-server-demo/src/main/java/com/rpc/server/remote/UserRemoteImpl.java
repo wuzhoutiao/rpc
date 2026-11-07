@@ -1,7 +1,6 @@
 package com.rpc.server.remote;
 
 import com.rpc.api.model.User;
-import com.rpc.api.protocol.Response;
 import com.rpc.api.service.UserRemote;
 import com.rpc.server.annotation.Remote;
 import com.rpc.server.service.UserService;
@@ -16,34 +15,26 @@ public class UserRemoteImpl implements UserRemote {
     private UserService userService;
 
     @Override
-    public Response saveUser(User user) {
+    public User saveUser(User user) {
         userService.saveUser(user);
-        Response response = createSuccessResponse(user);
-        return response;
+        return user;
     }
 
     @Override
-    public Response saveUsers(List<User> userslist) {
+    public List<User> saveUsers(List<User> userslist) {
         userService.saveUsers(userslist);
-        Response response = createSuccessResponse(userslist);
-        return response;
+        return userslist;
     }
 
     @Override
-    public Response findUser(long id) {
+    public String findUser(long id) {
         FaultInjector.beforeQuery();
-        return createSuccessResponse("user:" + id);
+        return "user:" + id;
     }
 
     @Override
-    public Response findUser(long id, String name) {
+    public String findUser(long id, String name) {
         FaultInjector.beforeQuery();
-        return createSuccessResponse("user:" + id + ":" + name);
-    }
-
-    private Response createSuccessResponse(Object result) {
-        Response response = new Response();
-        response.setResult(result);
-        return response;
+        return "user:" + id + ":" + name;
     }
 }

@@ -1,7 +1,6 @@
 package com.rpc.service.service;
 
 import com.rpc.api.model.User;
-import com.rpc.api.protocol.Response;
 import com.rpc.api.service.UserRemote;
 import com.rpc.client.annotation.RemoteInvoke;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,11 +23,11 @@ public class ClientService {
     }
 
     // 远程调用
-    public Response callRemote(User user) {
+    public User callRemote(User user) {
         return userRemote.saveUser(user);
     }
 
-    public Response findRemote(long id, String name) {
+    public String findRemote(long id, String name) {
         return userRemote.findUser(id, name);
     }
 }

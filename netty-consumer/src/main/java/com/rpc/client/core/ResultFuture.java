@@ -1,7 +1,7 @@
 package com.rpc.client.core;
 
 import com.rpc.api.protocol.Request;
-import com.rpc.api.protocol.Response;
+import com.rpc.api.protocol.RpcResponse;
 import com.rpc.client.constants.Constants;
 
 import java.util.concurrent.ConcurrentHashMap;
@@ -22,7 +22,7 @@ public class ResultFuture {
     private final Condition condition = lock.newCondition();
 
     // RPC 响应
-    private Response response;
+    private RpcResponse response;
 
     // 请求是否已经完成
     private boolean completed = false;
@@ -71,7 +71,7 @@ public class ResultFuture {
     /**
      * 等待 RPC 响应
      */
-    public Response get() {
+    public RpcResponse get() {
 
         lock.lock();
 
@@ -109,7 +109,7 @@ public class ResultFuture {
     /**
      * 收到服务端响应、发送失败响应或超时响应
      */
-    public static void receive(Response response) {
+    public static void receive(RpcResponse response) {
 
         if (response == null) {
             return;
@@ -129,7 +129,7 @@ public class ResultFuture {
      *
      * 同一个请求只能完成一次。
      */
-    private void complete(Response response) {
+    private void complete(RpcResponse response) {
 
         lock.lock();
 
@@ -172,9 +172,9 @@ public class ResultFuture {
     /**
      * 创建超时响应
      */
-    private Response createTimeoutResponse() {
+    private RpcResponse createTimeoutResponse() {
 
-        Response response = new Response();
+        RpcResponse response = new RpcResponse();
 
         response.setId(requestId);
 
@@ -249,7 +249,7 @@ public class ResultFuture {
             // 2. 遍历当前所有请求
             for (ResultFuture future : map.values()) {
 
-                Response response = new Response();
+                RpcResponse response = new RpcResponse();
 
                 response.setId(future.requestId);
                 response.setCode("RPC_CLIENT_SHUTDOWN");

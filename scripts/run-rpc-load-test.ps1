@@ -56,6 +56,25 @@ function Wait-TcpPort([int]$Port, [int]$TimeoutSeconds = 30) {
     throw "Timed out waiting for port $Port."
 }
 
+function Wait-ProcessPort([int]$Port, [System.Diagnostics.Process]$Process,
+                          [string]$StdoutPath, [string]$StderrPath,
+                          [int]$TimeoutSeconds = 40) {
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if (Test-TcpPort $Port) { return }
+        $Process.Refresh()
+        if ($Process.HasExited) {
+            if (Test-Path $StdoutPath) { Get-Content $StdoutPath }
+            if (Test-Path $StderrPath) { Get-Content $StderrPath }
+            throw "Provider process exited before port $Port became ready; exitCode=$($Process.ExitCode)."
+        }
+        Start-Sleep -Milliseconds 300
+    }
+    if (Test-Path $StdoutPath) { Get-Content $StdoutPath }
+    if (Test-Path $StderrPath) { Get-Content $StderrPath }
+    throw "Timed out waiting for Provider port $Port."
+}
+
 function Wait-PortFree([int]$Port, [int]$TimeoutSeconds = 10) {
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     while ([DateTime]::UtcNow -lt $deadline) {
@@ -105,7 +124,7 @@ function Start-Provider([int]$Port, [int]$MetricsPort, [int]$DelayMs = 0,
     $process = Start-Process -FilePath $script:maven -ArgumentList $arguments `
         -WorkingDirectory $repoRoot -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-    Wait-TcpPort $Port 40
+    Wait-ProcessPort $Port $process $stdout $stderr 40
     $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
         Select-Object -First 1
     if (-not $listener) { throw "Provider listener disappeared from port $Port." }
@@ -168,6 +187,17 @@ $maven = Get-MavenCommand
 
 try {
     Set-Location $repoRoot
+    if ($SkipBuild) {
+        $requiredClasses = @(
+            (Join-Path $repoRoot "netty-server-demo\target\classes\com\rpc\server\SpringServer.class"),
+            (Join-Path $repoRoot "rpc-service\target\classes\com\rpc\service\RpcLoadTest.class")
+        )
+        $missingClasses = @($requiredClasses | Where-Object { -not (Test-Path -LiteralPath $_) })
+        if ($missingClasses.Count -gt 0) {
+            Write-Warning "-SkipBuild was ignored because compiled classes are missing. Building RPC project..."
+            $SkipBuild = $false
+        }
+    }
     if (-not $SkipBuild) {
         Write-Host "Building RPC project..."
         & $maven -q clean install -DskipTests
@@ -200,8 +230,9 @@ try {
         $providerA = Start-Provider $ProviderPort 19091
         $providerB = Start-Provider $SecondaryProviderPort 19093
     } elseif ($FaultMode -eq "slow") {
+        Set-Content -LiteralPath $faultControlFile -Value "normal" -Encoding Ascii
         $providerA = Start-Provider $ProviderPort 19091
-        $providerB = Start-Provider $SecondaryProviderPort 19093 $FaultDelayMs 0
+        $providerB = Start-Provider $SecondaryProviderPort 19093 $FaultDelayMs 0 $faultControlFile
     } elseif ($FaultMode -eq "circuit-recovery") {
         Set-Content -LiteralPath $faultControlFile -Value "fail" -Encoding Ascii
         $providerA = Start-Provider $ProviderPort 19091 0 1.0 $faultControlFile
@@ -215,7 +246,7 @@ try {
     $readyMarker = Join-Path $runLogs "client-$Mode-$FaultMode-$stamp.ready"
     if (Test-Path $readyMarker) { Remove-Item -LiteralPath $readyMarker -Force }
     $actionDelay = [Math]::Max(3, [Math]::Min(15, [int]($DurationSeconds / 3)))
-    $faultAtValue = if ($FaultMode -in @("provider-down", "circuit-recovery")) { $actionDelay + 1 } else { -1 }
+    $faultAtValue = if ($FaultMode -in @("provider-down", "slow", "circuit-recovery")) { $actionDelay + 1 } else { -1 }
     $clientArguments = @(
         "-q", "-pl", "rpc-service",
         "org.codehaus.mojo:exec-maven-plugin:3.5.0:java",
@@ -238,6 +269,11 @@ try {
         Wait-File $readyMarker 60 $client $clientOut $clientErr
         Start-Sleep -Seconds $actionDelay
         Stop-ManagedProvider $providerB "Provider B (fault injection)"
+    } elseif ($FaultMode -eq "slow") {
+        Wait-File $readyMarker 60 $client $clientOut $clientErr
+        Start-Sleep -Seconds $actionDelay
+        Set-Content -LiteralPath $faultControlFile -Value "slow" -Encoding Ascii
+        Write-Host "Provider B switched to ${FaultDelayMs}ms slow responses."
     } elseif ($FaultMode -eq "circuit-recovery") {
         Wait-File $readyMarker 60 $client $clientOut $clientErr
         Start-Sleep -Seconds $actionDelay
@@ -262,8 +298,11 @@ try {
         if ([long]$latest.post_fault_success -gt 0) { Write-Host "[PASS] Requests succeeded after Provider shutdown; failover is working." }
         else { Write-Warning "[WARN] No request succeeded after Provider shutdown; inspect failover logs." }
     } elseif ($FaultMode -eq "slow") {
-        if ([long]$latest.circuit_open_events -gt 0) { Write-Host "[PASS] Slow Provider triggered circuit opening." }
-        else { Write-Warning "[WARN] No circuit-open event observed; increase FaultDelayMs or duration." }
+        if ([long]$latest.circuit_open_events -gt 0 -and [long]$latest.post_fault_success -gt 0) {
+            Write-Host "[PASS] Slow Provider was isolated and healthy traffic continued."
+        } else {
+            Write-Warning "[WARN] Slow-node isolation evidence is incomplete; inspect CSV and logs."
+        }
     } elseif ($FaultMode -eq "circuit-recovery") {
         if ([long]$latest.circuit_open_events -gt 0 -and [long]$latest.post_fault_success -gt 0) {
             Write-Host "[PASS] Circuit opening and successful post-recovery requests were observed."

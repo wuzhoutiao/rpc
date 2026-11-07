@@ -1,17 +1,16 @@
 package com.rpc.api.service;
 
 import com.rpc.api.model.User;
-import com.rpc.api.protocol.Response;
 
 import java.util.List;
 
 public interface UserRemote {
 
-    Response saveUser(User user);
+    User saveUser(User user);
 
-    Response saveUsers(List<User> users);
+    List<User> saveUsers(List<User> users);
 
-    Response findUser(long id);
+    String findUser(long id);
 
-    Response findUser(long id, String name);
+    String findUser(long id, String name);
 }

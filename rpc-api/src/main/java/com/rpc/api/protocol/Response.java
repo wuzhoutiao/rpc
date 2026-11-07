@@ -1,44 +1,9 @@
 package com.rpc.api.protocol;
 
-public class Response {
-
-    private long id;
-
-    private Object result;
-
-    private String code = "00000";
-
-    private String message;
-
-    public long getId() {
-        return id;
-    }
-
-    public void setId(long id) {
-        this.id = id;
-    }
-
-    public Object getResult() {
-        return result;
-    }
-
-    public void setResult(Object result) {
-        this.result = result;
-    }
-
-    public String getCode() {
-        return code;
-    }
-
-    public void setCode(String code) {
-        this.code = code;
-    }
-
-    public String getMessage() {
-        return message;
-    }
-
-    public void setMessage(String message) {
-        this.message = message;
-    }
+/**
+ * @deprecated 使用 {@link RpcResponse}。该别名仅用于兼容旧客户端代码，
+ * 业务服务接口不应返回协议响应类型。
+ */
+@Deprecated
+public class Response extends RpcResponse {
 }

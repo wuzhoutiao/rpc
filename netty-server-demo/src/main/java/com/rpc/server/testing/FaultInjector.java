@@ -15,12 +15,15 @@ public final class FaultInjector {
     private static final long DELAY_MILLIS = Math.max(0L, Long.getLong("rpc.fault.delay.ms", 0L));
     private static final double FAILURE_RATE = failureRate();
     private static final Path CONTROL_FILE = controlFile();
+    private static volatile String cachedState;
+    private static volatile long nextControlReadNanos;
 
     private FaultInjector() {
     }
 
     public static void beforeQuery() {
-        if (DELAY_MILLIS > 0) {
+        String state = faultState();
+        if (DELAY_MILLIS > 0 && delayEnabled(state)) {
             try {
                 TimeUnit.MILLISECONDS.sleep(DELAY_MILLIS);
             } catch (InterruptedException e) {
@@ -28,7 +31,7 @@ public final class FaultInjector {
                 throw new IllegalStateException("故障注入延迟被中断", e);
             }
         }
-        if (failureEnabled() && ThreadLocalRandom.current().nextDouble() < FAILURE_RATE) {
+        if (failureEnabled(state) && ThreadLocalRandom.current().nextDouble() < FAILURE_RATE) {
             throw new IllegalStateException("Provider 故障注入异常");
         }
     }
@@ -52,12 +55,30 @@ public final class FaultInjector {
         return value == null || value.trim().isEmpty() ? null : Paths.get(value);
     }
 
-    private static boolean failureEnabled() {
+    private static boolean delayEnabled(String state) {
+        return CONTROL_FILE == null || "slow".equalsIgnoreCase(state);
+    }
+
+    private static boolean failureEnabled(String state) {
         if (FAILURE_RATE <= 0) return false;
-        if (CONTROL_FILE == null) return true;
+        return CONTROL_FILE == null || !"normal".equalsIgnoreCase(state);
+    }
+
+    private static String faultState() {
+        if (CONTROL_FILE == null) return "enabled";
+        long now = System.nanoTime();
+        String state = cachedState;
+        if (state != null && now < nextControlReadNanos) return state;
+        return refreshFaultState(now);
+    }
+
+    private static synchronized String refreshFaultState(long now) {
+        if (cachedState != null && now < nextControlReadNanos) return cachedState;
         try {
-            String state = new String(Files.readAllBytes(CONTROL_FILE), StandardCharsets.UTF_8).trim();
-            return !"normal".equalsIgnoreCase(state);
+            cachedState = new String(
+                    Files.readAllBytes(CONTROL_FILE), StandardCharsets.UTF_8).trim();
+            nextControlReadNanos = now + TimeUnit.MILLISECONDS.toNanos(50);
+            return cachedState;
         } catch (Exception e) {
             throw new IllegalStateException("无法读取故障注入控制文件：" + CONTROL_FILE, e);
         }

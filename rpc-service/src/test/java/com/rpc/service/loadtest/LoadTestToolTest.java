@@ -1,6 +1,5 @@
 package com.rpc.service.loadtest;
 
-import com.rpc.api.protocol.Response;
 import com.rpc.client.constants.Constants;
 import com.rpc.client.core.RpcClientStats;
 import org.junit.After;
@@ -43,10 +42,10 @@ public class LoadTestToolTest {
     @Test
     public void calculatesAllRequiredMetricsFromRecordedCalls() {
         LoadTestStatistics statistics = new LoadTestStatistics();
-        statistics.record(response(Constants.SUCCESS), 1_000, false);
-        statistics.record(response(Constants.TIMEOUT), 2_000, false);
-        statistics.record(response(Constants.RATE_LIMITED), 3_000, true);
-        statistics.record(response(Constants.CIRCUIT_OPEN), 4_000, true);
+        statistics.recordSuccess(1_000, false);
+        statistics.recordFailure(Constants.TIMEOUT, 2_000, false);
+        statistics.recordFailure(Constants.RATE_LIMITED, 3_000, true);
+        statistics.recordFailure(Constants.CIRCUIT_OPEN, 4_000, true);
         statistics.recordException(5_000, true);
 
         RpcClientStats.Snapshot before = RpcClientStats.snapshot();
@@ -74,7 +73,7 @@ public class LoadTestToolTest {
         System.setProperty("rpc.load.output.dir", output.toString());
         LoadTestConfig config = LoadTestConfig.parse(new String[]{"smoke"});
         LoadTestStatistics statistics = new LoadTestStatistics();
-        statistics.record(response(Constants.SUCCESS), 1_000, false);
+        statistics.recordSuccess(1_000, false);
         RpcClientStats.Snapshot before = RpcClientStats.snapshot();
         LoadTestResult result = statistics.toResult(
                 config, 1.0, RpcClientStats.snapshot().minus(before));
@@ -88,9 +87,4 @@ public class LoadTestToolTest {
         assertTrue(lines.get(1).contains("\"smoke\""));
     }
 
-    private Response response(String code) {
-        Response response = new Response();
-        response.setCode(code);
-        return response;
-    }
 }

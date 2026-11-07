@@ -2,7 +2,7 @@ package com.rpc.server.handler;
 
 import com.alibaba.fastjson.JSONObject;
 import com.rpc.api.protocol.Request;
-import com.rpc.api.protocol.Response;
+import com.rpc.api.protocol.RpcResponse;
 import com.rpc.api.protocol.RpcMethodSignature;
 import com.rpc.api.metrics.RpcMetrics;
 import com.rpc.server.medium.RpcRequestDispatcher;
@@ -25,7 +25,7 @@ public class RpcServerHandler extends ChannelInboundHandlerAdapter {
             System.out.println("正在处理请求，id=" + request.getId() + ", command=" + request.getCommand());
         }
         long startNanos = System.nanoTime();
-        Response response = RpcRequestDispatcher.newInstance().process(request);
+        RpcResponse response = RpcRequestDispatcher.newInstance().process(request);
         long elapsedMillis = (System.nanoTime() - startNanos) / 1_000_000L;
         String service = RpcMethodSignature.serviceName(request.getCommand());
         String outcome = "00000".equals(response.getCode()) ? "success" : "failure";
